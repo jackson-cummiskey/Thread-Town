@@ -10,6 +10,10 @@
    department, per-record animate, setOpacity and dispose slots, portraitScale), docs/CONTRACT_V2.md
    (sections "Renderer integration"), docs/CONTRACT.md for everything later versions do not mention,
    docs/CITY_DESIGN.md, docs/ART_DIRECTION.md, docs/GOLF_DESIGN.md and docs/INTERIORS_DESIGN.md.
+   Version 12 (docs/CONTRACT_V12.md "Detection", "Wiring"): the touch layer (js/touch.js) on a mount
+   over the view, its read merged into the walk feed and the subway feed, orbit camera and the Phone
+   quality tier by default on touch devices, no pointer lock on touch, a 12 px tap slop for picks, the
+   120 px minimap, vibration on a landing, a catch and holing out. Nothing changes off touch.
    Version 6 (docs/CONTRACT_V6.md "Renderer integration" and "Leaderboard", docs/SUBWAY_DESIGN.md):
    the subway entrance on the plaza (a stairwell cut through the ground plane, railings, globe lamps,
    the THREAD METRO sign, the mosaic band), the game mode switch (the runner's own scene and camera
@@ -109,6 +113,7 @@ import * as VEHICLES from './vehicles.js';
 import { createWallet, itemById as walletItemById } from './wallet.js';
 import { createShop } from './shop.js';
 import { createMinimap } from './minimap.js';
+import * as TOUCH from './touch.js';
 import * as exec from './depts/exec.js';
 import * as embedded from './depts/embedded.js';
 import * as compliance from './depts/compliance.js';
@@ -211,10 +216,10 @@ let nature = null;             // buildNature result: { group, update, counts, d
 let hiRing = null;             // createHighlightRing result: { mesh, target, clear, update }
 let waterBodies = [];          // [{ id, kind, surface, pts | center, halfWidth }] from the plan and terrain.water
 let sunFar = null;             // the far shadow cascade: a second directional light over the whole map
-const SHADOW_RES = { high: { near: 4096, far: 2048 }, balanced: { near: 2048, far: 0 } };
+const SHADOW_RES = { high: { near: 4096, far: 2048 }, balanced: { near: 2048, far: 0 }, phone: { near: 1024, far: 0 } };
 const SUN_SPLIT_NEAR = 0.62;   // the near light's share of the sun intensity when the far cascade is on
 const QUALITY_KEY = 'threadtown.quality.v1';
-let quality = 'high';          // 'high' | 'balanced' (TT.town.setQuality, the header select)
+let quality = 'high';          // 'high' | 'balanced' | 'phone' (TT.town.setQuality, the header select; v12 adds phone)
 const shadowFit = { cx: NaN, cz: NaN, r: 0 };   // the near cascade's last bound (re-fit when the focus moves)
 let aoGroup = null;            // the building base ambient occlusion decals (one merged mesh)
 let flagShadowMesh = null;     // the flag pole shadows (one merged mesh)
@@ -313,7 +318,8 @@ const scoreboards = [];        // scoreboard sign records, see makeScoreboard
 let scoreboardFonts = null;
 let golfRank = null, golfDoneSeen = false;
 const SUB = { left: false, right: false, jump: false, duck: false, restart: false, quit: false, hover: false };   // game keys (v11: hover, H)
-const subInput = { left: false, right: false, jump: false, duck: false, restart: false, quit: false, hover: false };
+// v12: the swipes and the tap go through to the game as they are (js/subway.js maps them)
+const subInput = { left: false, right: false, jump: false, duck: false, restart: false, quit: false, hover: false, swipeLeft: false, swipeRight: false, swipeUp: false, swipeDown: false, tap: false };
 const SUBWAY_PROMPT = { text: 'Take the subway', key: 'E', full: 'E  Take the subway' };
 const SUBWAY_FADE = 0.35;      // seconds for each half of the fade around the scene switch
 const PLAYER_RADIUS = 0.28;    // js/player.js RADIUS: the visitor's collision square
@@ -361,6 +367,39 @@ let subwayHoverUsed = false;   // the runner's hoverboard power-up seen active t
 let closePay = 0;              // the near-miss pay shown on the 'Close!' flash
 let runnerHoverEl = null;      // the hoverboard pill in the runner HUD (built on first use; false when it cannot be)
 let runnerTitleEl = null;      // the summary card's title (h3), resolved on first use
+
+/* ---------- version 12 (CONTRACT_V12 "Detection", "Wiring") ----------
+   The touch layer (js/touch.js) is read through a namespace import so a missing export degrades to
+   no touch controls. isTouch is evaluated once (a test may force it through TT.isTouch before this
+   module loads); touchLive says whether the controls are up right now: at once on a coarse pointer,
+   on a laptop with a touchscreen only after the first touchstart on the view and off again after a
+   mouse move. The html 'touch' class follows touchLive. Nothing below changes when isTouch is false. */
+const createTouch = typeof TOUCH.createTouch === 'function' ? TOUCH.createTouch : null;
+const touchForced = typeof TT.isTouch === 'boolean' ? TT.isTouch : null;
+const touchCoarse = touchForced !== null ? touchForced : (() => {
+  try { return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && !!window.matchMedia('(pointer: coarse)').matches; } catch (e) { return false; }
+})();
+const isTouch = touchForced !== null ? touchForced : (touchCoarse || (() => {
+  try { return typeof navigator !== 'undefined' && (navigator.maxTouchPoints | 0) > 0; } catch (e) { return false; }
+})());
+TT.isTouch = isTouch;
+let touch = null;              // createTouch result: { el, read(out), active, setMode(mode), vibrate(ms), destroy() }
+let touchMount = null;         // the mount div over the view the layer lives on
+let touchLive = false;         // the controls are up (see above)
+let touchKey = '';             // the last mode handed to touch.setMode (plus the hoverboard ownership)
+const TOUCH_MODE_OPTS = { hover: false, hoverOwned: false };   // the flags handed to touch.setMode (hover: the H button shows)
+/* The preallocated read target: touch.read(TOUCH_IN) fills it every frame and clears its edges. */
+const TOUCH_IN = { fwd: 0, side: 0, run: false, jump: false, jumpHeld: false, interact: false, hover: false, boost: false, drive: false, toggleView: false, map: false, club: false, quit: false,
+  lookDX: 0, lookDY: 0, zoom: 0, swipeLeft: false, swipeRight: false, swipeUp: false, swipeDown: false, tap: false };
+const TOUCH_SLOP = 12, CLICK_SLOP = 4;   // a tap picks within 12 px, a mouse click within 4
+let lastPointerType = 'mouse';
+let rippleMesh = null;         // the water ripple mesh (off on the Phone tier)
+const natureFull = new Map();  // InstancedMesh -> { count, matrix, color }: the full nature layer, restored when the tier goes back up
+const PHONE_DENSITY = { 'trees-': 0.55, reeds: 0.55, logs: 0.55, 'grass-tufts': 0.3, 'flower-beds': 0.3, 'flower-blooms': 0.3 };
+const PHONE_FOG = 0.85;        // the fog band a little nearer on the Phone tier
+const PHONE_PIXEL_RATIO = 1.5;
+/* The vibration edges: the visitor's hop landing, the hoverboard landing, holing out, the catch. */
+const buzzState = { pose: '', hoverAir: false, golfPhase: '', subState: '' };
 
 // scratch
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _c = new THREE.Color(), _c2 = new THREE.Color();
@@ -658,7 +697,7 @@ function resize() {
    recede into the sky color. Inside a room the room's own fog stays. */
 function applyFog() {
   if (!fog || insideRoom || !camera || !controls) return;
-  const D = Math.max(85, camera.position.distanceTo(controls.target));
+  const D = Math.max(85, camera.position.distanceTo(controls.target)) * (quality === 'phone' ? PHONE_FOG : 1);   // v12: a little nearer on the Phone tier
   const near = 0.95 * D, far = 2.4 * D;
   if (Math.abs(fog.near - near) > 0.5 || Math.abs(fog.far - far) > 0.5) { fog.near = near; fog.far = far; }
 }
@@ -862,7 +901,7 @@ function updateShadows(force) {
    the far cascade, the building base AO decals and the golf extras (streak, puff, birds);
    Balanced halves the near map and drops the rest. The choice persists in townStorage. */
 function setQuality(mode) {
-  mode = mode === 'balanced' ? 'balanced' : 'high';
+  mode = mode === 'balanced' || mode === 'phone' ? mode : 'high';
   const changed = mode !== quality;
   quality = mode;
   const res = SHADOW_RES[quality];
@@ -882,26 +921,120 @@ function setQuality(mode) {
   if (aoGroup) aoGroup.visible = quality === 'high';
   if (birds && quality !== 'high') { birds.active = false; birds.mesh.visible = false; }
   if (ballStreak && quality !== 'high') ballStreak.visible = false;
+  // v12 (CONTRACT_V12 "Wiring"): the Phone tier thins the nature layer, drops the water ripples,
+  // caps the pixel ratio at 1.5 and pulls the fog in (applyFog reads the tier)
+  applyNatureDensity(quality === 'phone');
+  if (rippleMesh) rippleMesh.visible = quality !== 'phone';
+  applyPixelRatio();
+  if (camera && controls) applyFog();
   lastEnvS = -1;
   if (changed) townStorage.set(QUALITY_KEY, quality);
   const sel = typeof document !== 'undefined' && document.getElementById ? document.getElementById('quality-mode') : null;
   if (sel && sel.value !== quality) sel.value = quality;
   return quality;
 }
+const QUALITY_OPTIONS = [['high', 'High'], ['balanced', 'Balanced'], ['phone', 'Phone']];
+const QUALITY_TITLE = 'High: full shadows, the far cascade and the extras. Balanced: lighter shadows for integrated graphics. Phone: the lightest tier for a phone';
+/* v12: the renderer's pixel ratio, capped at 2 (1.5 on the Phone tier); a change resizes the buffer. */
+function applyPixelRatio() {
+  if (!renderer || typeof renderer.setPixelRatio !== 'function') return;
+  const dpr = (typeof window !== 'undefined' && isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0) ? window.devicePixelRatio : 1;
+  const want = Math.min(dpr, quality === 'phone' ? PHONE_PIXEL_RATIO : 2);
+  const have = typeof renderer.getPixelRatio === 'function' ? renderer.getPixelRatio() : NaN;
+  if (have === want) return;
+  renderer.setPixelRatio(want);
+  if (viewW > 1 && viewH > 1) renderer.setSize(viewW, viewH, false);
+}
+/* v12: the Phone tier keeps 55 percent of the trees (the forest cores, the sim's own trees, always
+   stay), reeds and logs, and 30 percent of the tufts, beds and blooms; rocks stay. Each instanced
+   mesh keeps its full matrices in natureFull so the tier can go back up; the kept instances are
+   compacted to the front and count is lowered, so the draw calls stay and the instances drop. */
+function phoneDensityFor(name) {
+  for (const k in PHONE_DENSITY) { if (name === k || (k.endsWith('-') && name.startsWith(k))) return PHONE_DENSITY[k]; }
+  return 1;
+}
+function applyNatureDensity(reduce) {
+  if (!nature || !nature.group || !Array.isArray(nature.group.children)) return;
+  let cores = null;
+  if (reduce) {
+    cores = new Set();
+    for (const t of (TT.state && TT.state.trees) || []) if (t && isFinite(t.x) && isFinite(t.y)) cores.add((t.x | 0) + ',' + (t.y | 0));
+  }
+  for (const im of nature.group.children) {
+    if (!im || !im.isInstancedMesh || !im.instanceMatrix) continue;
+    const frac = phoneDensityFor(im.name || '');
+    if (frac >= 1) continue;
+    let rec = natureFull.get(im);
+    if (!rec) { rec = { count: im.count, matrix: im.instanceMatrix.array.slice(0), color: im.instanceColor ? im.instanceColor.array.slice(0) : null }; natureFull.set(im, rec); }
+    if (!reduce) {
+      if (im.count === rec.count) continue;
+      im.instanceMatrix.array.set(rec.matrix); im.instanceMatrix.needsUpdate = true;
+      if (rec.color && im.instanceColor) { im.instanceColor.array.set(rec.color); im.instanceColor.needsUpdate = true; }
+      im.count = rec.count;
+      continue;
+    }
+    const n = rec.count, M = rec.matrix, want = Math.ceil(n * frac);
+    const keep = [];
+    const isCore = new Uint8Array(n);
+    if (cores && im.name && im.name.startsWith('trees-')) {
+      for (let i = 0; i < n; i++) { if (cores.has(Math.floor(M[i * 16 + 12]) + ',' + Math.floor(M[i * 16 + 14]))) { isCore[i] = 1; keep.push(i); } }
+    }
+    const rest = n - keep.length, wantRest = Math.max(0, want - keep.length);
+    const fr = rest > 0 ? wantRest / rest : 0;
+    // the rest thinned evenly by a golden ratio stride (deterministic, no clumps)
+    for (let i = 0, j = 0; i < n; i++) { if (isCore[i]) continue; if (((j * 0.6180339887498949) % 1) < fr) keep.push(i); j++; }
+    keep.sort((a, b) => a - b);
+    if (keep.length === im.count && keep.length === n) continue;
+    const A = im.instanceMatrix.array, C = rec.color && im.instanceColor ? im.instanceColor.array : null;
+    for (let j = 0; j < keep.length; j++) {
+      const i = keep[j];
+      for (let k = 0; k < 16; k++) A[j * 16 + k] = M[i * 16 + k];
+      if (C) { C[j * 3] = rec.color[i * 3]; C[j * 3 + 1] = rec.color[i * 3 + 1]; C[j * 3 + 2] = rec.color[i * 3 + 2]; }
+    }
+    im.count = keep.length;
+    im.instanceMatrix.needsUpdate = true;
+    if (C) im.instanceColor.needsUpdate = true;
+  }
+}
+/* The instances the nature layer draws right now, by mesh name (tests and the console). */
+function natureInstanceCounts() {
+  const out = {};
+  if (!nature || !nature.group) return out;
+  for (const im of nature.group.children) if (im && im.isInstancedMesh) out[im.name || 'nature'] = im.count;
+  return out;
+}
 /* The header control: a Quality select beside the Camera select, built here so index.html and
-   ui.js stay untouched; the choice stored from an earlier session is applied first. */
+   ui.js stay untouched; the choice stored from an earlier session is applied first. v12: the select
+   shows High, Balanced, Phone; Phone is the default on a touch device; a select already in the
+   markup (the phone menu) is filled and wired here too. */
 function installQualityControl() {
   const stored = townStorage.get(QUALITY_KEY);
-  if (stored === 'balanced' || stored === 'high') quality = stored;
+  if (stored === 'balanced' || stored === 'high' || stored === 'phone') quality = stored;
+  else if (touchCoarse) quality = 'phone';   // a coarse primary pointer (a phone); a touchscreen laptop keeps the laptop tier
   if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
+  let sel = document.getElementById ? document.getElementById('quality-mode') : null;
+  if (sel) {
+    if (sel.dataset && sel.dataset.ttWired === '1') return;
+    const have = sel.options ? Array.from(sel.options).map(o => o.value) : [];
+    if (QUALITY_OPTIONS.some(([v]) => !have.includes(v))) {
+      sel.innerHTML = '';
+      for (const [v, t] of QUALITY_OPTIONS) { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); }
+    }
+    if (!sel.title) sel.title = QUALITY_TITLE;
+    sel.value = quality;
+    if (sel.dataset) sel.dataset.ttWired = '1';
+    sel.addEventListener('change', ev => setQuality(ev.target.value));
+    return;
+  }
   const host = document.querySelector('header .controls');
-  if (!host || document.getElementById('quality-mode')) return;
+  if (!host) return;
   const label = document.createElement('label');
   label.appendChild(document.createTextNode('Quality '));
-  const sel = document.createElement('select');
-  sel.id = 'quality-mode'; sel.title = 'High: full shadows, the far cascade and the extras. Balanced: lighter shadows for integrated graphics';
-  for (const [v, t] of [['high', 'High'], ['balanced', 'Balanced']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); }
+  sel = document.createElement('select');
+  sel.id = 'quality-mode'; sel.title = QUALITY_TITLE;
+  for (const [v, t] of QUALITY_OPTIONS) { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); }
   sel.value = quality;
+  if (sel.dataset) sel.dataset.ttWired = '1';
   label.appendChild(sel);
   const anchor = document.getElementById('btn-add');
   if (anchor && anchor.parentNode === host) host.insertBefore(label, anchor); else host.appendChild(label);
@@ -1154,6 +1287,8 @@ function buildWater() {
   const ripple = new THREE.Mesh(mk(0.012), rippleMat);
   ripple.name = 'ripples';
   ripple.castShadow = false; ripple.receiveShadow = false;
+  ripple.visible = quality !== 'phone';   // v12: off on the Phone tier
+  rippleMesh = ripple;
   scene.add(ripple);
 }
 
@@ -1185,6 +1320,7 @@ function buildNatureLayer() {
   if (!nature || !nature.group) { nature = null; return; }
   registerGroupMaterials(nature.group);
   scene.add(nature.group);
+  applyNatureDensity(quality === 'phone');   // v12: the Phone tier thins the layer from the start
 }
 
 /* ---------- building base ambient occlusion decals (v10 "General") ----------
@@ -3091,40 +3227,146 @@ function renderPlayerStation(time) {
   return k < 0.85 ? 'walk' : br.pose;
 }
 
-/* Feeds one frame of input to the player: keys plus any headless input, edges consumed once. */
+/* Feeds one frame of input to the player: keys plus any headless input, edges consumed once.
+   v12: the touch layer's read (readTouch) merges the same way as extInput: fwd and side added and
+   clamped, edges ORed, look deltas and zoom added, hover, boost, drive, club, quit and map mapped
+   to their walk keys (the Club button cycles club1, club2, club3 from the club in hand). */
 function feedPlayerInput() {
   const ext = extInput;
+  const tin = readTouch();
   let fwd = (WALK.fwd ? 1 : 0) - (WALK.back ? 1 : 0);
   let side = (WALK.right ? 1 : 0) - (WALK.left ? 1 : 0);
   if (ext) { fwd = clamp(fwd + (ext.fwd || 0), -1, 1); side = clamp(side + (ext.side || 0), -1, 1); }
+  if (tin) { fwd = clamp(fwd + (isFinite(tin.fwd) ? tin.fwd : 0), -1, 1); side = clamp(side + (isFinite(tin.side) ? tin.side : 0), -1, 1); }
   walkInput.fwd = fwd; walkInput.side = side;
-  walkInput.run = WALK.run || !!(ext && ext.run);
-  walkInput.jump = WALK.jump || !!(ext && ext.jump);
-  walkInput.jumpHeld = WALK.jumpHeld || !!(ext && ext.jumpHeld);
-  walkInput.interact = WALK.interact || !!(ext && ext.interact);
+  walkInput.run = WALK.run || !!(ext && ext.run) || !!(tin && tin.run);
+  walkInput.jump = WALK.jump || !!(ext && ext.jump) || !!(tin && tin.jump);
+  walkInput.jumpHeld = WALK.jumpHeld || !!(ext && ext.jumpHeld) || !!(tin && tin.jumpHeld);
+  walkInput.interact = WALK.interact || !!(ext && ext.interact) || !!(tin && tin.interact);
   // v6: the subway prompt belongs to the renderer, so the interact edge is consumed here before the
   // player sees it; the whole feed is muted while the overlay fades around the scene switch
   if (walkInput.interact && subwayCanEnter() && inSubwayZone(player.pos.x, player.pos.y)) { walkInput.interact = false; requestSubway(TT.state.time); }
   // v11: the kiosk prompt belongs to the renderer too: E in front of the kiosk opens the shop
   if (walkInput.interact && kioskCanOpen() && nearKiosk(player.pos.x, player.pos.y)) { walkInput.interact = false; openShopFrom('kiosk'); }
-  walkInput.hover = WALK.hover || !!(ext && ext.hover);                      // v11: H, the hoverboard edge
-  walkInput.boost = WALK.run || !!(ext && (ext.boost || ext.run));          // v11: Shift held boosts while riding
-  if (ext && ext.map && minimap) minimap.toggle();                           // v11: the headless M
+  walkInput.hover = WALK.hover || !!(ext && ext.hover) || !!(tin && tin.hover);                      // v11: H, the hoverboard edge
+  walkInput.boost = WALK.run || !!(ext && (ext.boost || ext.run)) || !!(tin && tin.boost);          // v11: Shift held boosts while riding; v12: the Boost button
+  if (((ext && ext.map) || (tin && tin.map)) && minimap) minimap.toggle();                           // v11: the headless M; v12: the Map button
   // v11: while the shop modal is up the keys belong to it (ui.js treats it as an open modal)
   if (subwayPhase || shopOpen()) { walkInput.fwd = 0; walkInput.side = 0; walkInput.run = false; walkInput.jump = false; walkInput.jumpHeld = false; walkInput.interact = false; walkInput.hover = false; walkInput.boost = false; }
-  walkInput.toggleView = WALK.view || !!(ext && ext.toggleView);
-  walkInput.lookDX = WALK.lookDX + (ext && isFinite(ext.lookDX) ? ext.lookDX : 0);
-  walkInput.lookDY = WALK.lookDY + (ext && isFinite(ext.lookDY) ? ext.lookDY : 0);
-  // the wheel sets the chase distance (v7: the chase camera is the only walk view)
-  walkInput.zoom = WALK.zoom + (ext && isFinite(ext.zoom) ? ext.zoom : 0);
+  walkInput.toggleView = WALK.view || !!(ext && ext.toggleView) || !!(tin && tin.toggleView);
+  walkInput.lookDX = WALK.lookDX + (ext && isFinite(ext.lookDX) ? ext.lookDX : 0) + (tin && isFinite(tin.lookDX) ? tin.lookDX : 0);
+  walkInput.lookDY = WALK.lookDY + (ext && isFinite(ext.lookDY) ? ext.lookDY : 0) + (tin && isFinite(tin.lookDY) ? tin.lookDY : 0);
+  // the wheel sets the chase distance (v7: the chase camera is the only walk view); v12: the pinch too
+  walkInput.zoom = WALK.zoom + (ext && isFinite(ext.zoom) ? ext.zoom : 0) + (tin && isFinite(tin.zoom) ? tin.zoom : 0);
   walkInput.club1 = WALK.club1 || !!(ext && ext.club1);
   walkInput.club2 = WALK.club2 || !!(ext && ext.club2);
   walkInput.club3 = WALK.club3 || !!(ext && ext.club3);
-  walkInput.quit = WALK.quit || !!(ext && ext.quit);
-  walkInput.drive = WALK.drive || !!(ext && (ext.drive || ext.tab));   // v8: Tab, the cart auto-drive
+  if (tin && tin.club) {
+    // the Club button cycles driver, iron, putter from the club in hand
+    const cur = player.golf && player.golf.club;
+    if (cur === 'driver') walkInput.club2 = true; else if (cur === 'iron') walkInput.club3 = true; else walkInput.club1 = true;
+  }
+  walkInput.quit = WALK.quit || !!(ext && ext.quit) || !!(tin && tin.quit);
+  walkInput.drive = WALK.drive || !!(ext && (ext.drive || ext.tab)) || !!(tin && tin.drive);   // v8: Tab, the cart auto-drive; v12: the Tab button
   player.setInput(walkInput);
   WALK.jump = WALK.interact = WALK.view = WALK.club1 = WALK.club2 = WALK.club3 = WALK.quit = WALK.drive = WALK.hover = false; WALK.lookDX = WALK.lookDY = WALK.zoom = 0;
   if (ext) { ext.jump = ext.interact = ext.toggleView = ext.club1 = ext.club2 = ext.club3 = ext.quit = ext.drive = ext.tab = ext.hover = ext.map = false; ext.lookDX = ext.lookDY = ext.zoom = 0; }
+}
+
+/* ---------- v12: the touch layer (CONTRACT_V12 "The touch layer", "Wiring") ----------
+   Built on a mount div over the view once isTouch is true and js/touch.js exports createTouch; every
+   call into it is guarded so a missing or failing export never stops the frame. readTouch returns
+   TOUCH_IN filled by touch.read while the controls are live, else null (and TOUCH_IN cleared), so
+   the walk feed and the subway feed can merge it like extInput. */
+function clearTouchIn() {
+  const t = TOUCH_IN;
+  t.fwd = t.side = t.lookDX = t.lookDY = t.zoom = 0;
+  t.run = t.jump = t.jumpHeld = t.interact = t.hover = t.boost = t.drive = t.toggleView = t.map = t.club = t.quit = false;
+  t.swipeLeft = t.swipeRight = t.swipeUp = t.swipeDown = t.tap = false;
+}
+function readTouch() {
+  if (!touch || !touchLive || typeof touch.read !== 'function') { clearTouchIn(); return null; }
+  try { touch.read(TOUCH_IN); } catch (e) { clearTouchIn(); return null; }
+  return TOUCH_IN;
+}
+function buildTouchLayer() {
+  if (!isTouch || !createTouch || !container || typeof document === 'undefined' || typeof document.createElement !== 'function') return;
+  // the mount is the stage host (the div over the view): the layer appends its own #touch-layer there
+  // and writes --touch-stack on the mount, which css reads on #minimap (a sibling, so the host it is)
+  touchMount = container;
+  try {
+    touch = createTouch({
+      mount: touchMount, isTouch,
+      onToggleView: () => { if (camMode === 'walk' && !gameMode) WALK.view = true; },
+      onQuit: () => { if (gameMode === 'subway') SUB.quit = true; else if (camMode === 'walk') WALK.quit = true; },
+    }) || null;
+  } catch (e) { console.warn('Thread Town: the touch layer failed to build', e); touch = null; }
+  if (touch && touch.el && !touch.el.parentNode && touchMount.appendChild) { try { touchMount.appendChild(touch.el); } catch (e) { /* the layer mounts itself */ } }
+  if (!touch) touchMount = null;
+  setTouchLive(touchCoarse);
+}
+/* The controls go live (the html 'touch' class, the 120 px minimap, the mode) or hide again. */
+function setTouchLive(on) {
+  on = !!on && isTouch;
+  if (on === touchLive) return;
+  touchLive = on;
+  if (typeof document !== 'undefined' && document.documentElement && document.documentElement.classList) {
+    try { document.documentElement.classList.toggle('touch', on); } catch (e) { /* ignore */ }
+  }
+  applyTouchLayout();
+  if (subway && typeof subway.setTouch === 'function') { try { subway.setTouch(on); } catch (e) { /* ignore */ } }
+  if (controls) { applyControlsTouches(); applyCameraMode(); }   // the touch mapping and the camera hint read touchLive
+  syncTouchMode();
+}
+/* OrbitControls' touch mapping: one finger orbits and two fingers pinch while the controls are live
+   (a coarse pointer, or a touchscreen laptop after its first touch); the v11 mapping otherwise. */
+function applyControlsTouches() {
+  if (!controls) return;
+  controls.touches = (touchLive || touchCoarse)
+    ? { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }
+    : { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
+}
+/* The minimap is 120 px on touch (the slot's inline size; the canvases fill it). */
+function applyTouchLayout() {
+  if (!isTouch || !minimapMount || !minimapMount.style) return;
+  const px = touchLive ? '120px' : '';
+  if (minimapMount.style.width !== px) { minimapMount.style.width = px; minimapMount.style.height = px; }
+}
+/* The mode the layer shows buttons for: the player state while walking, 'runner' in the subway,
+   'none' outside walk mode, behind the shop modal and while the overlay fades around a scene switch. */
+function touchModeNow() {
+  if (!touchLive || !walkOn || !player) return 'none';
+  if (gameMode === 'subway') return 'runner';
+  if (subwayPhase || shopOpen()) return 'none';
+  const s = player.state;
+  return s === 'hover' ? 'hover' : s === 'scooter' ? 'ride' : s === 'boat' ? 'boat' : s === 'golf' ? 'golf' : s === 'cart' ? 'cart' : 'walk';
+}
+function syncTouchMode() {
+  if (!touch || typeof touch.setMode !== 'function') return;
+  const mode = touchModeNow();
+  const owned = !!(wallet && typeof wallet.owns === 'function' && wallet.owns('hoverboard'));
+  const key = mode + (owned ? '+h' : '');
+  if (key === touchKey) return;
+  touchKey = key;
+  TOUCH_MODE_OPTS.hover = owned; TOUCH_MODE_OPTS.hoverOwned = owned;
+  try { touch.setMode(mode, TOUCH_MODE_OPTS); } catch (e) { /* the layer keeps its last mode */ }
+}
+/* navigator.vibrate through the layer (a landing, a catch, holing out); nothing without the controls. */
+function buzz(ms) {
+  if (!touch || !touchLive || typeof touch.vibrate !== 'function') return;
+  try { touch.vibrate(ms); } catch (e) { /* ignore */ }
+}
+/* The walk-side vibration edges, after the player stepped this frame. */
+function syncBuzz(p) {
+  const pose = p.pose || '';
+  if (buzzState.pose === 'hop' && pose !== 'hop') buzz(25);
+  buzzState.pose = pose;
+  const air = !!(p.state === 'hover' && p.hover && p.hover.airborne);
+  if (buzzState.hoverAir && !air && p.state === 'hover') buzz(35);
+  buzzState.hoverAir = air;
+  const phase = p.golf && p.state === 'golf' ? (p.golf.phase || '') : '';
+  if (phase === 'holed' && buzzState.golfPhase !== 'holed') buzz(60);
+  buzzState.golfPhase = phase;
 }
 function clearWalkKeys() {
   WALK.fwd = WALK.back = WALK.left = WALK.right = WALK.run = WALK.jumpHeld = false;
@@ -3273,6 +3515,7 @@ function syncPlayer(dt, time) {
   syncCart(dt);
   syncBoats(dt);          // v11: the boats before the rider, so the seat is where the hull is this frame
   syncHoverboard(p, dt);  // v11: the board before the rider, so the lean the body takes is this frame's
+  if (touch) syncBuzz(p); // v12: the landing and holing out vibrations
   const pr = playerRec, h = pr.handle, g = h.group;
   const L = p.state === 'leisure' ? p.leisure : null;
   const G = p.state === 'golf' ? p.golf : null;
@@ -3990,6 +4233,7 @@ function buildMinimap() {
   }
   if (minimap.overlay && minimap.overlay.style) { minimap.overlay.style.width = '100%'; minimap.overlay.style.height = '100%'; }
   if (minimapMount) minimapMount.hidden = true;
+  applyTouchLayout();   // v12: 120 px on touch
 }
 function minimapMode(p) {
   if (!p || !walkOn || gameMode || subwayPhase || cinematic || insideRoom || p.interior) return 'hidden';
@@ -4283,6 +4527,7 @@ function setHudVisible(on) {
 }
 
 function requestLock() {
+  if (touchLive) return;   // v12: no pointer lock on touch, the look drag replaces it
   if (!canvasEl || pointerLocked || !canvasEl.requestPointerLock) return;
   try { const r = canvasEl.requestPointerLock(); if (r && typeof r.catch === 'function') r.catch(() => {}); } catch (e) { /* not allowed here */ }
 }
@@ -4317,6 +4562,7 @@ function setWalkMode(on, spec) {
     walkOn = true;
     syncPlayer(0.001, TT.state.time);
     setHudVisible(true);
+    if (touch) syncTouchMode();   // v12: the walk buttons at once
     return true;
   }
   if (!walkOn) return false;
@@ -4351,6 +4597,7 @@ function setWalkMode(on, spec) {
   // the camera is at eye level where the walk ended; float back to the overview from there
   if (controls) { controls.target.y = 0; if (camMode === 'free') { clampCameraPos(); syncFreeTarget(); } controls.update(); }
   resetView();
+  if (touch) syncTouchMode();   // v12: the buttons go with walk mode
   return true;
 }
 
@@ -4676,9 +4923,11 @@ function ensureSubwayGame() {
       // v11: the chasers, the coins into the wallet, the purchased power-ups and the hoverboard ownership
       makeChaser: makeChaserCharacter, animateChaser: animateRunnerCharacter,
       onRunEnd, consumables: runConsumables, hoverboardOwned: () => !!(wallet && wallet.owns('hoverboard')),
+      isTouch: touchLive,   // v12: the 'Tap to run' lines
     });
   } catch (e) { console.error('Thread Town: the subway runner failed to build', e); subway = null; }
   if (subway) subway.resize(viewW, viewH);
+  if (subway && typeof subway.setTouch === 'function') { try { subway.setTouch(touchLive); } catch (e) { /* ignore */ } }
   return subway;
 }
 /* The visitor may take the subway while walking and idle outdoors, with no fade or game under way. */
@@ -4804,14 +5053,23 @@ function stepSubway(dt, time) {
   const ext = subExt, mute = subwayPhase === 'out';
   // v11: the shop opens from the card through ui.js (not openShopFrom), so a held duck is
   // dropped here while the modal is up and no edge queued before it opened reaches the game
-  if (shopOpen()) clearSubKeys();
+  const shopUp = shopOpen();
+  if (shopUp) clearSubKeys();
+  // v12: the touch layer's swipes and tap (and its Pause, the quit) go through as they are
+  const tin = readTouch();
+  const tOk = !!tin && !mute && !shopUp;
   subInput.left = !mute && (SUB.left || !!(ext && ext.left));
   subInput.right = !mute && (SUB.right || !!(ext && ext.right));
   subInput.jump = !mute && (SUB.jump || !!(ext && ext.jump));
   subInput.duck = !mute && (SUB.duck || !!(ext && ext.duck));
   subInput.restart = !mute && (SUB.restart || !!(ext && ext.restart));
-  subInput.quit = !mute && (SUB.quit || !!(ext && ext.quit));
+  subInput.quit = !mute && (SUB.quit || !!(ext && ext.quit) || (tOk && !!tin.quit));
   subInput.hover = !mute && (SUB.hover || !!(ext && ext.hover));   // v11
+  subInput.swipeLeft = tOk && !!tin.swipeLeft;
+  subInput.swipeRight = tOk && !!tin.swipeRight;
+  subInput.swipeUp = tOk && !!tin.swipeUp;
+  subInput.swipeDown = tOk && !!tin.swipeDown;
+  subInput.tap = tOk && !!tin.tap;
   game.setInput(subInput);
   SUB.left = SUB.right = SUB.jump = SUB.restart = SUB.quit = SUB.hover = false;
   if (ext) ext.left = ext.right = ext.jump = ext.restart = ext.quit = ext.hover = false;
@@ -4822,6 +5080,7 @@ function stepSubway(dt, time) {
     if (h.state === 'ready') { subwayRunT = 0; subwayDeadT = 0; subwayRank = null; subwayGoT = -1; }
     else if (h.state === 'running') subwayGoT = time;
     else if (h.state === 'dead') subwayDeadT = 0;
+    else if (h.state === 'caught') buzz(120);   // v12: the catch
     subwayLastState = h.state;
   }
   if (h.state === 'running') subwayRunT += dt;
@@ -4846,7 +5105,44 @@ const rEls = {};
 let runnerSlotEls = null;
 const RSTATE_INIT = { dist: '', coins: '', best: '', bestNew: null, power: null, kind: '', barW: -1, shield: null, mult: null, warn: -2, flash: false, gold: null, count: '', go: null, over: null, odist: '', ocoins: '', obest: '', olife: '', newbest: null, rank: '', rankHide: null,
   // v11: the multiplier chip text, the hoverboard pill and its text, the card title
-  multText: '', hover: null, hoverText: '', title: '' };
+  multText: '', hover: null, hoverText: '', title: '',
+  // v12: the 'Tap to run' lines (the start screen and the card) on touch
+  tapStart: '', tapCard: '' };
+let runnerTapEls = null;       // v12: { start, card } built on first use (false when they cannot be)
+/* v12: the 'Tap to run' line under the countdown (#runner-tap in #runner-center) and in the card's key row
+   (.runner-tap in .runner-keys); index.html stays as it is, the elements are built here on first use. */
+function ensureRunnerTapEls() {
+  if (runnerTapEls !== null) return runnerTapEls;
+  runnerTapEls = false;
+  if (typeof document === 'undefined' || !document.createElement) return runnerTapEls;
+  const out = { start: null, card: null };
+  const center = rEl('runner-center'), count = rEl('runner-count');
+  if (center && center.appendChild) {
+    const el = document.createElement('div');
+    el.id = 'runner-tap'; el.className = 'runner-tap'; el.hidden = true; el.textContent = 'Tap to run';
+    try { if (count && count.parentNode === center && center.insertBefore) center.insertBefore(el, count.nextSibling || null); else center.appendChild(el); out.start = el; } catch (e) { out.start = null; }
+  }
+  const over = rEl('runner-over');
+  let keys = null;
+  if (over && typeof over.querySelector === 'function') { try { keys = over.querySelector('.runner-keys'); } catch (e) { keys = null; } }
+  if (keys && keys.appendChild) {
+    const el = document.createElement('span');
+    el.className = 'runner-tap'; el.hidden = true; el.textContent = 'Tap to run';
+    try { keys.appendChild(el); out.card = el; } catch (e) { out.card = null; }
+  }
+  if (out.start) rEls['runner-tap'] = out.start;
+  runnerTapEls = (out.start || out.card) ? out : false;
+  return runnerTapEls;
+}
+function writeTapLines(h) {
+  const line = typeof h.tapLine === 'string' ? h.tapLine : '';
+  if (!line && !rState.tapStart && !rState.tapCard) return;
+  const els = ensureRunnerTapEls();
+  if (!els) return;
+  const start = h.state === 'ready' ? line : '', card = h.state === 'dead' ? line : '';
+  if (els.start && rState.tapStart !== start) { rState.tapStart = start; els.start.textContent = start || 'Tap to run'; els.start.hidden = !start; }
+  if (els.card && rState.tapCard !== card) { rState.tapCard = card; els.card.textContent = card || 'Tap to run'; els.card.hidden = !card; }
+}
 const rState = Object.assign({}, RSTATE_INIT);
 function rEl(id) {
   let el = rEls[id];
@@ -4947,11 +5243,13 @@ function writeRunnerHud(h, time) {
     rText('runner-over-rank', 'rank', rk);
     rHide('runner-over-rank', 'rankHide', !rk);
   }
+  writeTapLines(h);   // v12
 }
 /* Hides every runner piece and drops the caches so the next run starts clean. */
 function resetRunnerHud() {
   if (typeof document === 'undefined') return;
   for (const id of ['runner-count', 'runner-over', 'runner-over-newbest', 'runner-over-rank', 'runner-power', 'runner-shield', 'runner-mult', 'runner-hover']) { const el = rEls[id] || (id === 'runner-hover' ? null : rEl(id)); if (el && !el.hidden) el.hidden = true; }
+  if (runnerTapEls) { for (const k of ['start', 'card']) { const el = runnerTapEls[k]; if (el && !el.hidden) el.hidden = true; } }   // v12
   rClass('runner-flash', 'hit', false); rClass('runner-coins', 'pulse', false); rClass('runner-best', 'new', false);
   rClass('runner-count', 'go', false); rClass('runner-coin-disc', 'gold', false);
   for (const s of runnerSlots()) s.classList.remove('on');
@@ -4977,6 +5275,21 @@ function pickAt(clientX, clientY) {
   }
   return null;
 }
+/* v12: a finger is wider than an agent at the overview (about 3 px across on a 390 px phone), so a tap
+   that misses tries a ring of offsets out to the 12 px slop and takes the first hit, an agent before a
+   building. Only taps use it; a mouse click keeps the exact v11 path. */
+const TAP_RING = [[0, -6], [6, 0], [0, 6], [-6, 0], [4, -4], [4, 4], [-4, 4], [-4, -4], [0, -12], [12, 0], [0, 12], [-12, 0], [8, -8], [8, 8], [-8, 8], [-8, -8]];
+function pickNear(clientX, clientY) {
+  let p = pickAt(clientX, clientY);
+  if (p && p.kind === 'agent') return p;
+  let dept = p;
+  for (let i = 0; i < TAP_RING.length; i++) {
+    const q = pickAt(clientX + TAP_RING[i][0], clientY + TAP_RING[i][1]);
+    if (q && q.kind === 'agent') return q;
+    if (q && !dept) dept = q;
+  }
+  return dept;
+}
 let downX = 0, downY = 0, pointerDown = false;
 /* Hover pause is applied the moment the hover changes (not only on the next render) so the
    simulation freezes the alien right away, including when stepped headlessly with tick(). */
@@ -4988,7 +5301,15 @@ function bindPointer() {
   // Pointer Lock (CONTRACT_V4 "Input"): locked while walking after a click on the canvas; Esc releases it.
   document.addEventListener('pointerlockchange', () => { pointerLocked = document.pointerLockElement === canvasEl; });
   document.addEventListener('pointerlockerror', () => { pointerLocked = false; });
+  // v12: a laptop with a touchscreen shows the controls after the first touch on the view and hides
+  // them again after a mouse move; a coarse pointer keeps them (nothing here runs when isTouch is false)
+  if (isTouch) {
+    canvasEl.addEventListener('touchstart', () => { if (!touchLive) setTouchLive(true); }, { passive: true });
+    if (touchMount && touchMount !== container && touchMount.addEventListener) touchMount.addEventListener('touchstart', () => { if (!touchLive) setTouchLive(true); }, { passive: true });
+    else if (container && container.addEventListener) container.addEventListener('touchstart', () => { if (!touchLive) setTouchLive(true); }, { passive: true });
+  }
   canvasEl.addEventListener('pointermove', ev => {
+    if (isTouch && touchLive && !touchCoarse && ev.pointerType === 'mouse' && !ev.buttons) setTouchLive(false);   // v12
     if (camMode === 'walk') {
       // mouse look: movementX/Y while locked, right-drag deltas otherwise; no hover picking
       if (pointerLocked) { WALK.lookDX += ev.movementX || 0; WALK.lookDY += ev.movementY || 0; }
@@ -5016,6 +5337,7 @@ function bindPointer() {
   });
   canvasEl.addEventListener('pointerdown', ev => {
     pointerDown = true; downX = ev.clientX; downY = ev.clientY;
+    lastPointerType = ev.pointerType || 'mouse';   // v12: a tap picks with a wider slop
     FREE.btn = ev.button; FREE.lastX = ev.clientX; FREE.lastY = ev.clientY;
     if ((camMode === 'free' || camMode === 'walk') && ev.pointerType === 'mouse') { try { canvasEl.setPointerCapture(ev.pointerId); } catch (e) { /* synthetic events have no active pointer */ } }
   });
@@ -5036,9 +5358,11 @@ function bindPointer() {
   }, { passive: false });
   canvasEl.addEventListener('pointerleave', ev => { pointerDown = false; applyHoverPause(TT.state.hover, null); TT.state.hover = null; canvasEl.style.cursor = 'default'; if (TT.onHover) TT.onHover(null, ev); });
   canvasEl.addEventListener('click', ev => {
-    if (camMode === 'walk') { if (!pointerLocked && !gameMode) requestLock(); return; }   // v6: no pointer lock in the runner
-    if (Math.hypot(ev.clientX - downX, ev.clientY - downY) > 4) return;
-    const p = pickAt(ev.clientX, ev.clientY);
+    // v12: no pointer lock on touch (requestLock also refuses while the controls are live)
+    const tapped = lastPointerType === 'touch' || (ev.pointerType === 'touch');
+    if (camMode === 'walk') { if (!pointerLocked && !gameMode && !tapped) requestLock(); return; }   // v6: no pointer lock in the runner
+    if (Math.hypot(ev.clientX - downX, ev.clientY - downY) > (tapped ? TOUCH_SLOP : CLICK_SLOP)) return;   // v12: a tap picks within 12 px
+    const p = tapped ? pickNear(ev.clientX, ev.clientY) : pickAt(ev.clientX, ev.clientY);   // v12: a tap gets a finger-sized hit ring
     TT.state.selected = p;
     if (TT.onSelect) TT.onSelect(p);
     if (p) focusOn(p.kind, p.id);
@@ -5116,11 +5440,13 @@ function applyCameraMode() {
   controls.maxPolarAngle = free ? 1.5 : 1.15;
   applyZoomLimits();
   const hint = document.getElementById('cam-hint');
-  if (hint) hint.textContent = walk
-    ? 'WASD move · Mouse to look · Shift run or boost · Space jump, dive or swing · E interact · H hoverboard · M map · V near or far · Wheel zoom · 1 2 3 clubs · Tab cart auto-drive · X leave golf · Esc exit'
-    : free
-      ? 'Drag to move · Right-drag to look around · Scroll to fly · WASD glide · Q E turn · R F height'
-      : 'Drag to move · Right-drag to orbit · Scroll to zoom · WASD glide · Q E turn';
+  if (hint) hint.textContent = touchLive
+    ? (walk ? 'Joystick to move · Drag to look · Buttons on the right' : 'Drag to orbit · Pinch to zoom · Tap an agent or a building')   // v12
+    : walk
+      ? 'WASD move · Mouse to look · Shift run or boost · Space jump, dive or swing · E interact · H hoverboard · M map · V near or far · Wheel zoom · 1 2 3 clubs · Tab cart auto-drive · X leave golf · Esc exit'
+      : free
+        ? 'Drag to move · Right-drag to look around · Scroll to fly · WASD glide · Q E turn · R F height'
+        : 'Drag to move · Right-drag to orbit · Scroll to zoom · WASD glide · Q E turn';
 }
 function setCameraMode(mode) {
   // While walking, remember the choice for when walk mode ends instead of switching under the player.
@@ -5342,6 +5668,7 @@ function stepWorld(dt) {
   if (hiRing) hiRing.update(dt, time);
   updateOverlays();
   updateMinimap(time);   // v11: after the player and the prompt target of this frame
+  if (touch) syncTouchMode();   // v12: the layer's buttons follow the player state
 }
 /* v6: in game mode the runner's own scene and camera replace the town. */
 function renderFrame() {
@@ -5481,7 +5808,11 @@ function init(host) {
   controls.minPolarAngle = 0.55; controls.maxPolarAngle = 1.15;
   // City-builder feel: left-drag pans across the town, right-drag rotates, the wheel zooms toward the cursor.
   controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
-  controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
+  // v12 (CONTRACT_V12 "Wiring"): a coarse pointer device (a phone) starts in orbit mode, one finger
+  // orbits and a pinch zooms; the free camera stays available from the header. A touchscreen laptop
+  // keeps the v11 camera and only takes the touch mapping while the controls are live (applyControlsTouches).
+  if (touchCoarse) camMode = 'orbit';
+  applyControlsTouches();
   controls.zoomToCursor = true;
   controls.panSpeed = 1.0;
   controls.autoRotateSpeed = 0.35;
@@ -5490,8 +5821,9 @@ function init(host) {
   applyCameraMode();
 
   buildMaterials();
-  // v10: the stored quality mode decides the shadow maps the lights start with
+  // v10: the stored quality mode decides the shadow maps the lights start with; v12: Phone by default on touch
   installQualityControl();
+  applyPixelRatio();
   buildLights();
   nightS = clamp(TT.sim.darkness() / 0.62, 0, 1);
   paintSky(nightS);
@@ -5527,6 +5859,7 @@ function init(host) {
   resize();
   renderer.setSize(w, h, false);
   new ResizeObserver(() => resize()).observe(container);
+  buildTouchLayer();   // v12: the touch controls on a mount over the view (touch devices only)
   bindPointer();
 
   if (document.fonts && document.fonts.load) {
@@ -5607,13 +5940,19 @@ TT.town = {
   resize,
   /* v8: the terrain record (heightAt, slopeAt, normalAt, lotHeight) once the world is built. */
   get terrain() { return terrain; },
-  /* v10 (CONTRACT_V10 "Performance budget"): the quality mode, 'high' or 'balanced'. */
+  /* v10 (CONTRACT_V10 "Performance budget"): the quality mode, 'high', 'balanced' or (v12) 'phone'. */
   setQuality(mode) { return setQuality(mode); },
   quality() { return quality; },
+  /* v12 (CONTRACT_V12): the touch detection, whether the controls are live, and the layer itself. */
+  isTouch() { return isTouch; },
+  touchActive() { return touchLive; },
+  get touch() { return touch; },
   /* Debug handle for tuning from the console. Not part of the contract. */
   get _debug() { return { camera, controls, renderer, scene, fitDistance, mergeStats, container, buildingRecs, agentRecs, leisure, camAnim, followId, player, playerRec, walkOn, camMode, pointerLocked, interiors, golf, insideRoom, camKey, subway, gameMode, subwayPhase, leaderboard, scoreboards, subwayGroup, city, terrain, cart: cartRec, drawables: countDrawables, scooters: scooterRecs, scooterCounts, ground, roads, nature, hiRing, waterBodies, sun, sunFar, aoGroup, birds, quality, flagShadowMesh,
     // v11
-    wallet, shop, minimap, minimapMount, hoverRec, boatRecs, boatCounts, waterwayIdx, chaserChs, promptTarget: _pt, mmView, kioskPrompt: KIOSK_PROMPT, runnerState: rState }; },
+    wallet, shop, minimap, minimapMount, hoverRec, boatRecs, boatCounts, waterwayIdx, chaserChs, promptTarget: _pt, mmView, kioskPrompt: KIOSK_PROMPT, runnerState: rState,
+    // v12
+    isTouch, touchLive, touchCoarse, touch, touchMount, touchIn: TOUCH_IN, touchKey, rippleMesh, natureCounts: natureInstanceCounts, natureFull, fog, walkInput, subInput, lastPointerType }; },
 };
 if (TT.sim) { TT.deptStats = TT.sim.deptStats; TT.darkness = TT.sim.darkness; }
 if (typeof TT._readyResolve === 'function') TT._readyResolve();

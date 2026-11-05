@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Thread Town</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -23,30 +23,53 @@
     </div>
     <div class="spacer"></div>
     <div class="clock"><b id="clock">--:--</b><span id="daypart">Day</span></div>
-    <div class="controls">
-      <label>Lighting
-        <select id="lighting">
-          <option value="auto">Auto</option>
-          <option value="day">Day</option>
-          <option value="night">Night</option>
-        </select>
-      </label>
-      <label><input type="checkbox" class="switch" id="toggle-sim" checked> Simulate runs</label>
-      <label><input type="checkbox" class="switch" id="toggle-demo" checked> Demo agents</label>
-      <label>Camera
-        <select id="camera-mode">
-          <option value="free">Free roam</option>
-          <option value="orbit">Orbit</option>
-        </select>
-      </label>
-      <label><input type="checkbox" class="switch" id="toggle-cinematic"> Cinematic camera</label>
-      <button class="btn primary" id="btn-add">Add an agent</button>
-      <button class="btn" id="btn-walk" title="Walk the town in third person (Tab)">Walk the town</button>
-      <button class="btn" id="btn-leaderboard" title="Subway and Thread National records">Leaderboard</button>
-      <!-- Version 11 (CONTRACT_V11 "Coins, the wallet and the shop"): the coin counter. ui.js writes the count from
-           TT.wallet and adds .pulse when it grows; clicking it opens the shop (TT.shop). -->
-      <button class="btn coin-btn" id="coin-counter" title="Your coins. Open the shop"><span class="coin-disc"></span><b id="coin-count">0</b></button>
-      <button class="btn" id="btn-board">Board mode</button>
+    <!-- Version 12 (CONTRACT_V12 "Phone layout"): the header controls sit in three groups inside .controls-row so the
+         laptop order is unchanged (the groups share the 10 px gap). On touch (html.touch) the row dissolves: the quick
+         strip (the leaderboard and the coin count) stays beside the logo, the Menu label toggles the #menu-toggle
+         checkbox and css shows .controls as a sheet under the header; the board button is hidden on touch. The
+         renderer still inserts its Quality select into the first .controls, before #btn-add. -->
+    <div class="controls-row">
+      <input type="checkbox" id="menu-toggle" class="menu-check" aria-label="Menu">
+      <label for="menu-toggle" class="btn menu-btn" id="btn-menu">Menu</label>
+      <div class="controls">
+        <label>Lighting
+          <select id="lighting">
+            <option value="auto">Auto</option>
+            <option value="day">Day</option>
+            <option value="night">Night</option>
+          </select>
+        </label>
+        <label><input type="checkbox" class="switch" id="toggle-sim" checked> Simulate runs</label>
+        <label><input type="checkbox" class="switch" id="toggle-demo" checked> Demo agents</label>
+        <label>Camera
+          <select id="camera-mode">
+            <option value="free">Free roam</option>
+            <option value="orbit">Orbit</option>
+          </select>
+        </label>
+        <label><input type="checkbox" class="switch" id="toggle-cinematic"> Cinematic camera</label>
+        <button class="btn primary" id="btn-add">Add an agent</button>
+        <button class="btn" id="btn-walk" title="Walk the town in third person (Tab)">Walk the town</button>
+        <!-- The touch legend lives in the menu sheet and is shown only on touch (the key legend in the walk HUD is hidden there). -->
+        <div class="touch-legend" id="touch-legend">
+          <h3>Touch controls</h3>
+          <dl>
+            <dt>Move</dt><dd>Touch the left side: a stick appears under your thumb. Push to the edge to run.</dd>
+            <dt>Look</dt><dd>Drag anywhere else. Pinch to zoom.</dd>
+            <dt>Buttons</dt><dd>E interact, Jump, H hoverboard, Map, Boost, Tab drive to the ball, Swing, Club, Quit, View.</dd>
+            <dt>Subway</dt><dd>Swipe left or right for lanes, up to jump, down to slide. Tap for the hoverboard.</dd>
+          </dl>
+        </div>
+      </div>
+      <div class="quick">
+        <button class="btn" id="btn-leaderboard" title="Subway and Thread National records">Leaderboard</button>
+        <!-- Version 11 (CONTRACT_V11 "Coins, the wallet and the shop"): the coin counter. ui.js writes the count from
+             TT.wallet and adds .pulse when it grows; clicking it opens the shop (TT.shop). -->
+        <button class="btn coin-btn" id="coin-counter" title="Your coins. Open the shop"><span class="coin-disc"></span><b id="coin-count">0</b></button>
+      </div>
+      <div class="controls-tail">
+        <button class="btn" id="btn-board">Board mode</button>
+      </div>
     </div>
   </header>
 
@@ -59,6 +82,7 @@
       <!-- Walk mode HUD (CONTRACT_V4 "UI"). The renderer writes the prompt each frame; the chase camera is the only walk view (CONTRACT_V7). -->
       <div id="walk-hud" class="walk-ui">
         <div class="walk-title">Walk mode</div>
+        <!-- Version 12: the key legend is hidden on touch (html.touch); the touch legend sits in the header menu. -->
         <dl class="walk-legend">
           <dt>Move</dt><dd><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dd>
           <dt>Look</dt><dd>Mouse</dd>
@@ -121,6 +145,9 @@
       <!-- Version 11 (CONTRACT_V11 "The minimap"): the minimap slot, bottom-right over the view. js/minimap.js appends its
            canvas here (the renderer wires it); the slot itself passes pointer events through and only the canvas takes them. -->
       <div id="minimap" class="walk-ui" aria-label="Minimap"></div>
+      <!-- Version 12 (CONTRACT_V12 "The touch layer"): js/touch.js appends #touch-layer (the joystick ring #touch-stick and
+           the button column #touch-buttons) to this host at the end, so it sits above the canvas; css shows it only under
+           html.touch and keeps the minimap above the buttons through the --touch-stack variable the layer writes here. -->
       <!-- Version 6 subway runner HUD (CONTRACT_V6 "UI", docs/SUBWAY_DESIGN.md "HUD and summary"). Shown only under
            body.subway; the renderer writes the numbers each frame and toggles the hidden attributes. -->
       <div id="runner-flash" class="runner-ui" aria-hidden="true"></div>

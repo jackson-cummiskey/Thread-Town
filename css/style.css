@@ -33,6 +33,11 @@ header .clock { display: flex; align-items: baseline; gap: 8px; color: var(--mut
 header .clock b { color: var(--text); font-weight: 600; font-size: 15px; }
 .controls { display: flex; align-items: center; gap: 10px; }
 .controls label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+/* Version 12 (CONTRACT_V12 "Phone layout"): the controls sit in three groups (.controls, .quick, .controls-tail) inside
+   .controls-row; every group shares the 10 px gap so the laptop header reads exactly as before. The menu checkbox, its
+   label and the touch legend exist only for html.touch (see the touch block at the end of this file). */
+.controls-row, .quick, .controls-tail { display: flex; align-items: center; gap: 10px; }
+.menu-check, .menu-btn, .touch-legend { display: none; }
 select, .btn {
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; cursor: pointer;
 }
@@ -548,6 +553,7 @@ body.walk #minimap[hidden], body.subway #minimap, body.board #minimap { display:
 body.board { grid-template-columns: 1fr; grid-template-areas: "head" "stage"; }
 body.board aside { display: none; }
 body.board header .controls > *:not(#btn-board) { display: none; }
+body.board header .quick, body.board header .menu-btn { display: none; }
 body.board #stage-wrap { padding: 20px; }
 body.board #stage-host { padding-bottom: 50px; }
 body.board #board-wide {
@@ -568,10 +574,10 @@ body.board #ticker { font-size: 15px; padding: 10px 20px 10px 14px; bottom: 8px;
 @media (max-width: 640px) {
   header { gap: 10px; padding: 0 12px; }
   header .tag { display: none; }
-  .controls { overflow-x: auto; overflow-y: hidden; flex: none; max-width: calc(100% - 120px); scrollbar-width: none; }
-  .controls::-webkit-scrollbar { display: none; }
-  .controls > label { flex: none; }
-  .controls .btn { flex: none; white-space: nowrap; }
+  .controls-row { overflow-x: auto; overflow-y: hidden; flex: none; max-width: calc(100% - 120px); scrollbar-width: none; }
+  .controls-row::-webkit-scrollbar { display: none; }
+  .controls-row label { flex: none; }
+  .controls-row .btn { flex: none; white-space: nowrap; }
   #shop-modal .shop-card { width: calc(100% - 16px); max-height: calc(100% - 16px); padding: 16px 14px; }
   .shop-head { flex-direction: column; gap: 8px; }
   .shop-item { grid-template-columns: 36px 1fr; grid-template-areas: "icon body" "price action"; gap: 8px 10px; }
@@ -581,4 +587,158 @@ body.board #ticker { font-size: 15px; padding: 10px 20px 10px 14px; bottom: 8px;
   .shop-action { grid-area: action; min-width: 0; }
   .shop-list { max-height: none; }
   #minimap { bottom: 66px; }
+}
+
+/* ===== Version 12 (CONTRACT_V12 "Phone layout", "The touch layer"): everything below applies only while html has the
+   class touch, which js/touch.js sets once the controls are active (at once on a phone, after the first touch on a
+   laptop with a touchscreen, removed again after a mouse move). Laptops never see any of it. ===== */
+
+/* The header collapses to the logo, the coin count, the leaderboard and a Menu button; the menu checkbox shows the
+   rest of the controls (the picker, the quality select, the legend) as a sheet under the header. */
+html.touch header { position: relative; gap: 8px; padding: 0 10px; }
+html.touch header h1 { font-size: 18px; }
+html.touch header .tag, html.touch header .clock, html.touch .controls-tail { display: none; }
+html.touch .controls-row { display: contents; }
+html.touch .quick { gap: 6px; }
+html.touch .quick .btn { padding: 7px 10px; white-space: nowrap; }
+html.touch .menu-btn { display: inline-flex; align-items: center; padding: 7px 12px; font-weight: 500; }
+html.touch #menu-toggle:checked ~ .menu-btn { background: var(--aqua); color: var(--navy); border-color: transparent; }
+html.touch .controls {
+  display: none; position: absolute; left: 0; right: 0; top: 100%; z-index: 15;
+  flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px 18px;
+  background: var(--navy); border-bottom: 1px solid var(--line); box-shadow: 0 16px 40px rgba(0,0,0,0.45);
+  max-height: calc(100vh - 56px); overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch;
+}
+html.touch #menu-toggle:checked ~ .controls { display: flex; }
+html.touch .controls > label { justify-content: space-between; font-size: 14px; color: var(--text); min-height: 36px; }
+html.touch .controls > label select { min-width: 150px; font-size: 16px; }
+html.touch .controls > label .switch { width: 42px; height: 24px; flex: none; }
+html.touch .controls > label .switch::after { width: 18px; height: 18px; top: 2px; left: 2px; }
+html.touch .controls > label .switch:checked::after { transform: translateX(18px); }
+html.touch .controls > .btn { padding: 12px 14px; font-size: 15px; }
+html.touch .touch-legend { display: block; margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+html.touch .touch-legend h3 { margin: 0 0 8px; font: 600 14px/1.2 var(--display); color: var(--aqua); }
+html.touch .touch-legend dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0; font-size: 13px; }
+html.touch .touch-legend dt { color: var(--muted); }
+html.touch .touch-legend dd { margin: 0; color: var(--text); }
+
+/* The page: the stage keeps the room, the sidebar is a shorter strip below it; the view takes no browser gestures. */
+html.touch body { overflow: hidden; }
+html.touch #stage-host { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+html.touch #stage-wrap { padding: 8px; gap: 8px; }
+html.touch input, html.touch select, html.touch textarea { font-size: 16px; }
+@media (max-width: 980px) {
+  html.touch body { grid-template-rows: 56px 1fr 240px; }
+}
+
+/* The layer: pointer events pass through the root (the canvas keeps the tap to pick path); only the buttons take them.
+   z-index 5 keeps the HUD pieces (6, pointer events none) readable above the controls and the Change character link
+   and the minimap canvas tappable. */
+.touch-layer { display: none; }
+html.touch .touch-layer { display: block; position: absolute; inset: 0; z-index: 5; pointer-events: none; overflow: hidden; }
+.touch-stick {
+  position: absolute; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; pointer-events: none;
+  background: rgba(0,45,79,0.35); border: 2px solid rgba(117,204,208,0.65); box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+}
+.touch-stick[hidden] { display: none; }
+.touch-stick.run { border-color: var(--salmon); }
+.touch-knob {
+  position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; border-radius: 50%; transform: translate(-50%, -50%);
+  background: var(--aqua); box-shadow: 0 0 0 2px var(--navy), 0 4px 12px rgba(0,0,0,0.35);
+}
+.touch-stick.run .touch-knob { background: var(--salmon); }
+.touch-buttons {
+  position: absolute; right: 12px; bottom: 12px; display: grid; grid-template-columns: 56px 56px; gap: 10px;
+  justify-content: end; direction: rtl; pointer-events: none;
+}
+.touch-btn {
+  direction: ltr; width: 56px; height: 56px; border-radius: 50%; padding: 0; margin: 0; pointer-events: auto; touch-action: none;
+  background: rgba(0,45,79,0.6); border: 1.5px solid rgba(117,204,208,0.7); color: var(--aqua);
+  font: 600 13px/1 var(--display); letter-spacing: 0.2px; text-align: center; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.35); -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+  transition: transform .08s ease-out, background .08s ease-out;
+}
+.touch-btn[hidden] { display: none; }
+.touch-btn.down { background: var(--aqua); color: var(--navy); transform: scale(0.92); border-color: transparent; }
+.touch-btn-interact, .touch-btn-hover { font-size: 20px; }
+.touch-btn-quit, .touch-btn-pause { border-color: rgba(231,112,111,0.8); color: #FFB3B2; }
+.touch-btn-quit.down, .touch-btn-pause.down { background: var(--salmon); color: #FFFFFF; }
+
+/* The HUD on touch: 13 px type, the key legend gone (the touch legend is in the menu), the compact walk card in the top
+   left, the golf card across the top, the prompt pill low on the left clear of the button grid, the ticker
+   away while walking, the minimap 120 px above the buttons (--touch-stack is the button block height from touch.js). */
+html.touch #walk-hud { left: 10px; top: 10px; width: auto; max-width: 180px; padding: 8px 12px; font-size: 13px; }
+html.touch #walk-hud .walk-legend { display: none; }
+html.touch #walk-hud .walk-title { margin-bottom: 4px; }
+html.touch #walk-hud .walk-change { margin-top: 2px; font-size: 13px; padding: 4px 0; }
+html.touch #walk-prompt { left: 12px; right: auto; transform: none; bottom: 14px; font-size: 13px; max-width: calc(100% - 160px); overflow: hidden; text-overflow: ellipsis; }
+html.touch body.walk #ticker { display: none; }
+html.touch #interior-hint { font-size: 13px; top: 10px; }
+html.touch #golf-hud { left: 10px; right: 10px; top: 10px; min-width: 0; width: auto; padding: 10px 12px; font-size: 13px; }
+html.touch #golf-hud .golf-title { font-size: 16px; white-space: normal; }
+html.touch #golf-hud .golf-club-line, html.touch #golf-hud .golf-range, html.touch #golf-hud .golf-to-par-line, html.touch #golf-hud .golf-cart-line { font-size: 13px; }
+html.touch #golf-hud .golf-keys { display: none; }
+html.touch .golf-card { font-size: 12.5px; }
+html.touch .golf-card td { padding: 2px 2px; min-width: 0; }
+html.touch #stage-host:has(#golf-hud:not([hidden])) #walk-hud { display: none; }
+html.touch #golf-power { left: 12px; right: 146px; width: auto; transform: none; bottom: 80px; }
+html.touch #golf-power .golf-track { width: 100%; }
+html.touch #golf-msg { font-size: 20px; padding: 10px 18px; max-width: calc(100% - 24px); }
+html.touch #golf-msg small { font-size: 13px; }
+html.touch #minimap { width: 120px; height: 120px; right: 12px; bottom: calc(var(--touch-stack, 78px) + 10px); border-radius: 12px; }
+html.touch #minimap canvas { border-radius: 12px; }
+html.touch #btn-reset-view { left: 12px; bottom: 12px; }
+html.touch #runner-hud { padding: 12px; }
+html.touch #runner-dist { font-size: 26px; }
+html.touch #runner-coins { font-size: 20px; }
+html.touch #runner-best { font-size: 13px; }
+html.touch .runner-pill { width: 150px; }
+html.touch #runner-warn { bottom: 18%; }
+html.touch .runner-card { width: min(320px, calc(100% - 32px)); padding: 16px 18px; }
+html.touch .runner-keys { gap: 14px; flex-wrap: wrap; font-size: 13px; }
+html.touch .walk-ui kbd, html.touch #walk-prompt kbd { font-size: 11.5px; }
+
+/* The modals fit 390 px wide and scroll as one card. */
+html.touch #modal .card, html.touch #walk-modal .card, html.touch #leaderboard-modal .lb-card, html.touch #shop-modal .shop-card {
+  width: min(520px, calc(100% - 16px)); max-height: calc(100% - 16px); overflow-y: auto; overflow-x: hidden;
+  padding: 16px 14px; -webkit-overflow-scrolling: touch;
+}
+html.touch #leaderboard-modal .lb-card { width: min(620px, calc(100% - 16px)); }
+html.touch #shop-modal .shop-card { width: min(640px, calc(100% - 16px)); display: block; }
+html.touch .shop-list { max-height: none; overflow: visible; }
+html.touch .lb-list { max-height: none; overflow: visible; }
+html.touch .card .actions .btn { padding: 11px 16px; }
+@media (max-width: 640px) {
+  html.touch .form-grid { grid-template-columns: 1fr; }
+  html.touch .lb-head, html.touch .lb-list li { grid-template-columns: 24px 1fr 64px 96px 56px; gap: 6px; }
+  html.touch .lb-head.golf, html.touch .lb-list.golf li { grid-template-columns: 24px 1fr 56px 56px; }
+  html.touch .lb-head.golf #lb-head-detail { display: none; }
+  html.touch .lb-list.golf li .lb-detail { grid-column: 2 / -1; white-space: normal; }
+  html.touch .lb-tab { padding: 6px 12px; font-size: 12.5px; }
+  html.touch .shop-head { flex-direction: column; gap: 8px; }
+  html.touch .shop-item { grid-template-columns: 36px 1fr; grid-template-areas: "icon body" "price action"; gap: 8px 10px; }
+  html.touch .shop-icon { grid-area: icon; width: 36px; height: 36px; }
+  html.touch .shop-body { grid-area: body; }
+  html.touch .shop-price { grid-area: price; }
+  html.touch .shop-action { grid-area: action; min-width: 0; }
+}
+
+/* Landscape on a phone: the view fills the screen under a shorter header, the HUD runs along the top, the joystick and
+   the buttons take the lower corners, the minimap sits top right (there is no room for it above the buttons). */
+@media (orientation: landscape) and (max-height: 520px) {
+  html.touch body { grid-template-rows: 44px 1fr; grid-template-columns: 1fr; grid-template-areas: "head" "stage"; }
+  html.touch aside { display: none; }
+  html.touch header { padding: 0 calc(8px + env(safe-area-inset-right, 0px)) 0 calc(8px + env(safe-area-inset-left, 0px)); }
+  html.touch header h1 { font-size: 16px; }
+  html.touch .controls { max-height: calc(100vh - 44px); }
+  html.touch #stage-wrap { padding: 4px calc(4px + env(safe-area-inset-right, 0px)) 4px calc(4px + env(safe-area-inset-left, 0px)); }
+  html.touch #stage-host { border-radius: 8px; }
+  html.touch .touch-buttons { right: 10px; bottom: 10px; }
+  html.touch #minimap { top: 10px; right: 10px; bottom: auto; width: 100px; height: 100px; }
+  html.touch #golf-hud { left: auto; right: 120px; top: 10px; max-width: 46%; }
+  html.touch #golf-hud .golf-card { display: none; }
+  html.touch #golf-power { bottom: 16px; left: 140px; right: 146px; }
+  html.touch #walk-prompt { bottom: 10px; left: 140px; max-width: calc(100% - 290px); }
+  html.touch #interior-hint { top: 8px; }
+  html.touch #runner-hud { padding: 8px 12px; }
 }

@@ -17,7 +17,11 @@
    TT.wallet.coins (the renderer assigns TT.wallet from js/wallet.js and TT.shop from js/shop.js) and pulses when the
    count grows; the renderer calls TT.onWalletChange() after every change, and the 400 ms pass also polls. The counter,
    the runner card's Shop button and the character picker's hat field (the owned hats) talk to TT.shop and TT.wallet;
-   #shop-modal counts as an open modal for Tab and Esc. The #minimap slot is a walk-ui piece the renderer fills. */
+   #shop-modal counts as an open modal for Tab and Esc. The #minimap slot is a walk-ui piece the renderer fills.
+   Version 12 (CONTRACT_V12 "Wiring", the Phone layout): the renderer sets TT.isTouch and the html 'touch' class; the
+   header collapses on a phone and #btn-menu (when the markup has one) opens the rest of the controls under
+   body.menu-open (a tap outside the header, Esc or a header button closes it). The quality select (High, Balanced,
+   Phone) is built and wired by the renderer; ui.js only drops the Tab hint from the walk button on touch. */
 (function () {
   const TT = window.TT;
   const $ = s => document.querySelector(s);
@@ -510,6 +514,37 @@
     const tag = el.tagName;
     return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
   }
+
+  /* ----- the phone menu (CONTRACT_V12 "Wiring", the Phone layout) -----
+     The renderer evaluates the touch detection (TT.isTouch) and drives the html 'touch' class; css collapses the header
+     on a phone and shows #btn-menu, which opens the rest of the controls under body.menu-open. Nothing here runs when
+     the markup has no menu button. */
+  function isTouchDevice() {
+    try { return !!(TT.isTouch || (TT.town && typeof TT.town.isTouch === 'function' && TT.town.isTouch())); } catch (e) { return false; }
+  }
+  /* The markup may drive the sheet with a checkbox (#menu-toggle, the #btn-menu label for it, css shows .controls
+     while it is checked); without the checkbox #btn-menu is a plain button. body.menu-open mirrors the state. */
+  function menuBox() { return $('#menu-toggle'); }
+  function menuOpen() { const box = menuBox(); return box ? !!box.checked : document.body.classList.contains('menu-open'); }
+  function setMenu(open) {
+    open = !!open;
+    const box = menuBox();
+    if (box && box.checked !== open) box.checked = open;
+    if (document.body.classList.contains('menu-open') !== open) document.body.classList.toggle('menu-open', open);
+    const btn = $('#btn-menu');
+    if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  function wireMenu() {
+    const btn = $('#btn-menu'), box = menuBox();
+    if (!btn && !box) return;
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+    if (box) box.addEventListener('change', () => setMenu(box.checked));
+    else btn.addEventListener('click', ev => { ev.stopPropagation(); setMenu(!menuOpen()); });
+    // a header button (Walk the town, Add an agent, Board mode) closes the menu once it has done its work
+    const header = document.querySelector('header');
+    if (header) header.addEventListener('click', ev => { if (menuOpen() && ev.target.closest('button') && !ev.target.closest('#btn-menu')) setMenu(false); });
+    document.addEventListener('click', ev => { if (menuOpen() && !ev.target.closest('header')) setMenu(false); });
+  }
   function anyModalOpen() {
     return ['#modal', '#walk-modal', '#leaderboard-modal', '#shop-modal'].some(id => { const el = $(id); return el && el.classList.contains('open'); });
   }
@@ -797,6 +832,7 @@
       // While the pointer is locked, Esc only releases the lock (the browser does that); the
       // renderer handles a second Esc. Never exit board mode or reset the view from here then.
       if (document.pointerLockElement) return;
+      if (menuOpen()) { setMenu(false); return; }   // v12: the phone menu closes first
       closeAdd();
       if (shopOpen()) { closeShop(); return; }
       if ($('#leaderboard-modal').classList.contains('open')) { closeLeaderboard(); return; }
@@ -815,6 +851,9 @@
       camSel.value = TT.town.cameraMode ? TT.town.cameraMode() : 'free';
       camSel.addEventListener('change', ev => { TT.town.setCameraMode(ev.target.value); });
     }
+    /* v12: the phone menu, and no Tab hint on the walk button where there is no keyboard */
+    wireMenu();
+    if (isTouchDevice()) { const wb = $('#btn-walk'); if (wb) wb.title = 'Walk the town in third person'; }
 
     /* The Reset view pill shows only when the camera has left the full-town framing. */
     function renderResetView() {

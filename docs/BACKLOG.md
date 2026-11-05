@@ -32,6 +32,10 @@ Original v11 scope (built):
 - **Boats you can drive**: the marina and pier boats become rideable (a boat controller like the scooter's, on the lake and the river, slower turning, a wake; dock at the marina slips or the pier; E to board and to tie up). Agents stay on foot.
 - Plus Jackson's fixes from testing v10.
 
+## Built 2026-11-05, awaiting Jackson's phone test: v12 phone (docs/CONTRACT_V12.md)
+
+Touch layer (js/touch.js: joystick, buttons per mode, look drag, pinch, runner swipes), orbit camera and the Phone quality tier by default on coarse-pointer devices, phone layouts (collapsed header with a Menu button, 120 px minimap above the buttons). Laptop path verified identical. Checked in the browser pane at 375 by 812: no console errors, no horizontal scroll, buttons E, View, Map, Jump in walk mode.
+
 ## After that
 
 - **Person avatar** with customization (skin, hair, outfit, glasses) as a third character type.

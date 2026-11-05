@@ -6,7 +6,7 @@
    visitor's own town character driven through ctx.makeCharacter and ctx.animate.
 
    Public surface:
-     createSubwayGame(ctx) -> { scene, camera, group, start, setInput, update, hud, resize, dispose, _debug }
+     createSubwayGame(ctx) -> { scene, camera, group, start, setInput, update, hud, resize, dispose, setTouch, _debug }
      ctx = { THREE, makeCharacter(spec) -> handle, animate(handle, agent, time, dt, poseOverride), storage: { get, set } }
 
    Coordinates: the runner stays at z 0 and faces -z (the track scrolls toward +z). A thing at
@@ -52,7 +52,13 @@
      nearMisses, caught }) called once per run at the catch or a quit; ctx carries the same fields
      as defaults. hud gains chase, chaseT, stumble, caught, coinsEarned, nearMissCoins,
      nearMissStreak, streakBonus, nearMissTotal, double, hoverboard { active, until, remaining },
-     hoverboardOwned. All of it allocation free per frame. */
+     hoverboardOwned. All of it allocation free per frame.
+   v12 (docs/CONTRACT_V12.md "Runner"): touch input. setInput also takes the one-frame swipe edges
+     swipeLeft, swipeRight (lanes), swipeUp (jump), swipeDown (a slide: the duck is held for
+     SWIPE_DUCK seconds, or the fast fall in the air) and tap (the hoverboard power-up while running
+     when owned; on the game-over card a tap runs again). ctx.isTouch (or setTouch(on)) turns the
+     'Tap to run' line on: hud.tapLine reads 'Tap to run' on the start screen and the game-over card,
+     '' otherwise and off touch. The chaser and everything else unchanged. */
 import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { mat, glow, box, cyl, cone, sphere, torus, plane, canvasTex, decal, pointLight, lerp, clamp, easeInOut } from './depts/common.js';
@@ -62,6 +68,8 @@ const LANE_X = [-1.6, 0, 1.6];
 const SEG = 24, SLOTS = 8, ROW = 6, FIRST_ROW = 36, AHEAD = 150, BEHIND = 12;
 const SPEED0 = 9, SPEED_RATE = 0.35, SPEED_MAX = 24, READY_SCROLL = 3, READY_T = 2.4;
 const JUMP_V = 7.5, GRAV = 22, FAST_GRAV = 66, LANE_T = 0.18, SLIDE_MIN = 0.7, SLIDE_RELEASE = 0.08, JUMP_BUFFER = 0.10;
+const SWIPE_DUCK = 0.25;      // v12: a swipe down holds the duck this long (a full slide, SLIDE_MIN then the release)
+const TAP_LINE = 'Tap to run';
 const RUNNER_HW = 0.25, STAND_H = 1.1, SLIDE_H = 0.55;
 const APEX = JUMP_V * JUMP_V / (2 * GRAV);   // 1.278
 const DUR = { magnet: 8, shield: 25, double: 12, jet: 6 };
@@ -380,6 +388,8 @@ export function createSubwayGame(ctx) {
     // activations this run, forgiven this frame
     hoverOn: false, hoverT: 0, hoverUntil: 0, hoverPopT: -1, hoverUses: 0, hoverPop: false,
     ended: false,
+    // v12: touch (the 'Tap to run' line) and the swipe-down duck hold left (seconds)
+    touch: !!(ctx && ctx.isTouch), swipeDuckT: 0,
   };
   const input = { left: false, right: false, jump: false, duck: false, restart: false, quit: false, hover: false };
   const hudObj = {
@@ -387,6 +397,8 @@ export function createSubwayGame(ctx) {
     // v11
     chase: 'none', chaseT: 0, stumble: false, caught: false, coinsEarned: 0, nearMissCoins: 0, nearMissStreak: 0, streakBonus: 0, nearMissTotal: 0, double: false,
     hoverboard: { active: false, until: 0, remaining: 0 }, hoverboardOwned: false, hoverPop: false,
+    // v12
+    tapLine: '',
   };
   const hudPower = { kind: null, remaining: 0, duration: 1 };
   const evQuit = { type: 'quit' };
@@ -1812,6 +1824,7 @@ export function createSubwayGame(ctx) {
     S.nearPay = 0; S.nearTotal = 0; S.nearCoins = 0; S.nearStreak = 0; S.streakBonus = 0;
     S.hoverOn = false; S.hoverT = 0; S.hoverUntil = 0; S.hoverPopT = -1; S.hoverUses = 0; S.hoverPop = false;
     S.ended = false;
+    S.swipeDuckT = 0;   // v12
     CH.insp.group.visible = CH.dog.group.visible = CH.leash.visible = CH.puff.visible = CH.woof.visible = CH.board.visible = CH.halo.visible = false;
     CH.insp.group.position.set(0, 0, CHASE_FAR); CH.insp.handle.distance = 0;
     if (CH.insp.handle.poseState) CH.insp.handle.poseState.lastDist = NaN;
@@ -1873,6 +1886,7 @@ export function createSubwayGame(ctx) {
     if (dt > 0.05) dt = 0.05;
     S.time = Number.isFinite(time) ? time : S.time + dt;
     S.coinPulse = 0; S.hitFlash = false; S.nearMiss = 0; S.nearPay = 0; S.stumbled = false; S.hoverPop = false;
+    if (S.swipeDuckT > 0) { S.swipeDuckT -= dt; if (S.swipeDuckT <= 0) S.swipeDuckT = 0; }   // v12: the swipe-down duck hold runs out
     const prevTraveled = S.traveled;
     if (input.quit) {
       if (S.state === 'running') creditQuit();
@@ -1937,8 +1951,19 @@ export function createSubwayGame(ctx) {
     if (i.restart) input.restart = true;
     if (i.quit) input.quit = true;
     if (i.hover) input.hover = true;   // v11: the hoverboard power-up edge ('H')
-    input.duck = !!i.duck;
+    /* v12: the swipes (one-frame edges from the touch layer) and the tap */
+    if (i.swipeLeft) input.left = true;
+    if (i.swipeRight) input.right = true;
+    if (i.swipeUp) input.jump = true;
+    if (i.swipeDown) S.swipeDuckT = SWIPE_DUCK;
+    if (i.tap) {
+      if (S.state === 'dead') input.restart = true;          // the card: tap to run again
+      else if (S.state === 'running') input.hover = true;    // the hoverboard power-up (when owned; the game checks)
+    }
+    input.duck = !!i.duck || S.swipeDuckT > 0;
   }
+  /* v12: the 'Tap to run' line follows the caller's touch state (a laptop touchscreen may change it). */
+  function setTouch(on) { S.touch = !!on; }
   function hud() {
     hudObj.state = S.state;
     hudObj.distance = S.distance;
@@ -1963,6 +1988,8 @@ export function createSubwayGame(ctx) {
     hudObj.nearMissCoins = S.nearPay; hudObj.nearMissStreak = S.nearStreak; hudObj.streakBonus = S.streakBonus; hudObj.nearMissTotal = S.nearTotal;
     hudObj.hoverboard.active = S.hoverOn; hudObj.hoverboard.until = S.hoverOn ? S.hoverUntil : 0; hudObj.hoverboard.remaining = S.hoverOn ? S.hoverT : 0;
     hudObj.hoverPop = S.hoverPop;
+    /* v12: the 'Tap to run' line on the start screen (the countdown) and the game-over card, on touch only */
+    hudObj.tapLine = S.touch && (S.state === 'ready' || S.state === 'dead') ? TAP_LINE : '';
     return hudObj;
   }
   function resize(w, h) {
@@ -2012,5 +2039,5 @@ export function createSubwayGame(ctx) {
     chasers: CH, runOpts, stumble, scoreNearMiss, hit, camera,
   };
 
-  return { scene, camera, group, start, setInput, update, hud, resize, dispose, _debug: debug };
+  return { scene, camera, group, start, setInput, update, hud, resize, dispose, setTouch, _debug: debug };
 }
