@@ -8,7 +8,9 @@ A low-poly 3D city where every Thread Bank AI agent is an alien. Each department
 node serve.js
 ```
 
-Then open http://localhost:4173. No build step. Three.js is vendored under `node_modules/three` (installed with npm, version 0.160.0), so the page works without internet once the fonts are cached.
+Then open http://localhost:4173. No build step. The five three.js files the page loads (version 0.160.0, MIT) are vendored under `vendor/three`, so the page works from any static host, including GitHub Pages, and without internet once the fonts are cached. `npm install` is only needed for the headless tests, which import the full package from `node_modules`.
+
+Play it hosted: https://jackson-cummiskey.github.io/Thread-Town/ (GitHub Pages, served from the `main` branch). Progress, coins and the leaderboards live in each player's own browser.
 
 ## Controls
 
