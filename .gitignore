@@ -1,0 +1,6 @@
+node_modules/
+snaps/
+tests_tmp/
+*.log
+.DS_Store
+Thumbs.db

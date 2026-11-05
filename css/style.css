@@ -1,0 +1,584 @@
+/* Thread Town chrome. Brand tokens from the Thread Bank design system. */
+:root {
+  --navy: #002D4F; --navy-deep: #001A2E; --navy-2: #0A3A60; --blue: #004B91;
+  --aqua: #75CCD0; --salmon: #E7706F; --silver: #E2E9EE; --ink: #1A1F25;
+  --ok: #1F8A5B; --warn: #C68B17;
+  --panel: rgba(255,255,255,0.06); --panel-2: rgba(255,255,255,0.10); --line: rgba(255,255,255,0.12);
+  --text: #F4F7F9; --muted: #AFC0CE;
+  --display: 'Kanit', 'Inter', system-ui, sans-serif;
+  --body: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--navy-deep); color: var(--text); font: 14px/1.45 var(--body);
+  display: grid; grid-template-rows: 56px 1fr; grid-template-columns: 1fr 340px;
+  grid-template-areas: "head head" "stage side"; overflow: hidden;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+/* Dark form controls: tells the browser to draw native dropdown lists dark so options are not white on white. */
+input, select, textarea { color-scheme: dark; }
+select option, select optgroup { background: var(--navy); color: var(--text); }
+
+/* header */
+header {
+  grid-area: head; display: flex; align-items: center; gap: 16px; padding: 0 18px;
+  background: var(--navy); border-bottom: 1px solid var(--line);
+}
+header .brand { display: flex; align-items: baseline; gap: 10px; }
+header h1 { font: 600 20px/1 var(--display); margin: 0; letter-spacing: 0.2px; }
+header .tag { color: var(--aqua); font-size: 12px; text-transform: uppercase; letter-spacing: 1.4px; }
+header .spacer { flex: 1; }
+header .clock { display: flex; align-items: baseline; gap: 8px; color: var(--muted); font-size: 13px; }
+header .clock b { color: var(--text); font-weight: 600; font-size: 15px; }
+.controls { display: flex; align-items: center; gap: 10px; }
+.controls label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+select, .btn {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; cursor: pointer;
+}
+select { padding: 6px 8px; }
+.btn.primary { background: var(--aqua); color: var(--navy); border-color: transparent; font-weight: 600; }
+.btn.ghost { background: transparent; }
+.btn.small { padding: 5px 10px; font-size: 12px; }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn:hover:not(:disabled) { filter: brightness(1.1); }
+.switch { position: relative; width: 30px; height: 18px; appearance: none; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--muted); transition: transform .15s; }
+.switch:checked { background: var(--aqua); border-color: transparent; }
+.switch:checked::after { background: var(--navy); transform: translateX(12px); }
+
+/* stage */
+#stage-wrap { grid-area: stage; display: flex; gap: 16px; background: radial-gradient(ellipse at 50% 40%, #0B3A5E 0%, var(--navy-deep) 70%); padding: 10px; min-height: 0; min-width: 0; }
+/* The 3D renderer appends its WebGL canvas and #overlay here with position:absolute; inset:0. */
+#stage-host { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.08); }
+/* Layering inside #stage-host: canvas 1, #overlay 3, #fade 4, #runner-flash 5, #ticker, #insp-card, #walk-hud, #walk-prompt,
+   #golf-hud, #golf-power, #golf-msg, #interior-hint, #runner-hud and #runner-center 6, #tip 7. */
+#stage-host > canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; z-index: 1; }
+
+/* HTML labels projected over the 3D scene (positioned by the renderer) */
+#overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 3; }
+#overlay .tag {
+  position: absolute; pointer-events: none; transform: translate(-50%, -100%);
+  background: var(--navy); color: #FFFFFF; font: 500 11px/1.2 var(--body);
+  padding: 2px 7px; border-radius: 999px; white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+}
+#overlay .bubble {
+  position: absolute; pointer-events: none; transform: translate(-50%, -100%);
+  background: #FFFFFF; color: var(--navy); font: 400 12.5px/1.35 var(--body);
+  max-width: 220px; padding: 8px 10px; border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.12);
+  margin-top: -8px;
+}
+#overlay .bubble::after {
+  content: ''; position: absolute; left: 50%; top: 100%; transform: translateX(-50%);
+  border: 6px solid transparent; border-top-color: #FFFFFF; border-bottom: 0;
+}
+#overlay .bubble.error { background: var(--salmon); color: #FFFFFF; }
+#overlay .bubble.error::after { border-top-color: var(--salmon); }
+
+/* hover tooltip */
+#tip { position: absolute; z-index: 7; pointer-events: none; background: rgba(0,45,79,0.96); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 12.5px; max-width: 260px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+#tip[hidden] { display: none; }
+#tip b { font-weight: 600; font-size: 13px; }
+#tip .sub { color: var(--muted); font-size: 11.5px; margin-bottom: 4px; }
+#tip .line { display: flex; gap: 6px; align-items: baseline; }
+#tip .k { color: var(--aqua); font-size: 10.5px; text-transform: uppercase; letter-spacing: .8px; flex: none; width: 36px; }
+
+/* inspector card floats over the map (board mode only) */
+#insp-card { position: absolute; z-index: 6; left: 16px; bottom: 64px; width: 310px; max-height: calc(100% - 90px); overflow: auto; background: rgba(0,45,79,0.96); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; box-shadow: 0 16px 48px rgba(0,0,0,0.45); display: none; }
+#insp-card.open { display: block; }
+#insp-card .close { position: absolute; top: 8px; right: 10px; background: transparent; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; }
+#insp-card .close:hover { color: var(--text); }
+#cam-hint { position: absolute; right: 16px; bottom: 18px; font-size: 11.5px; color: var(--muted); background: rgba(0,45,79,0.75); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; pointer-events: none; white-space: nowrap; }
+body.board #cam-hint { display: none; }
+@media (max-width: 980px) { #cam-hint { display: none; } }
+#ticker {
+  position: absolute; z-index: 6; left: 50%; bottom: 18px; transform: translateX(-50%); max-width: calc(100% - 40px);
+  background: rgba(0,45,79,0.92); border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px 8px 12px;
+  display: flex; align-items: center; gap: 10px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+#ticker time { color: var(--aqua); font-variant-numeric: tabular-nums; font-size: 12px; }
+/* Reset view pill, bottom left of the stage, shown only away from the default framing */
+#btn-reset-view {
+  position: absolute; z-index: 6; left: 16px; bottom: 18px; border-radius: 999px;
+  background: rgba(0,45,79,0.92); border: 1px solid var(--line); box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+#btn-reset-view[hidden] { display: none; }
+body.board #btn-reset-view { bottom: 8px; }
+#ticker.flash { animation: flash .6s ease-out; }
+@keyframes flash { from { box-shadow: 0 0 0 4px rgba(117,204,208,0.6); } to { box-shadow: 0 8px 24px rgba(0,0,0,0.35); } }
+
+/* sidebar */
+aside { grid-area: side; background: var(--navy); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+aside section { padding: 14px 16px; border-bottom: 1px solid var(--line); flex: none; }
+aside section.grow { max-height: 46vh; overflow: auto; }
+aside h2 { font: 600 16px/1.2 var(--display); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+aside h2 .count { color: var(--muted); font: 500 12px var(--body); background: var(--panel-2); padding: 2px 8px; border-radius: 999px; }
+aside h2 .right { margin-left: auto; }
+
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.kpi b { display: block; font: 600 20px/1.1 var(--display); }
+.kpi small { color: var(--muted); font-size: 11px; }
+
+.board { list-style: none; margin: 0; padding: 0; }
+.board li { display: grid; grid-template-columns: 10px 1fr 90px 28px 22px 8px; align-items: center; gap: 8px; padding: 5px 0; font-size: 12.5px; }
+.board .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board .bar { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+.board .bar i { display: block; height: 100%; border-radius: 3px; transition: width .4s; }
+.board .num { text-align: right; font-variant-numeric: tabular-nums; }
+.board .dim { color: var(--muted); }
+.board-head { display: grid; grid-template-columns: 10px 1fr 90px 28px 22px 8px; gap: 8px; color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .8px; padding-bottom: 4px; }
+.board-head span:nth-child(4), .board-head span:nth-child(5) { text-align: right; }
+.swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: transparent; }
+.live-dot.on { background: var(--salmon); box-shadow: 0 0 0 3px rgba(231,112,111,0.3); animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(231,112,111,0.0); } }
+
+.roster { display: flex; flex-direction: column; gap: 4px; }
+.row { display: grid; grid-template-columns: 24px 1fr auto; align-items: center; gap: 10px; width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 6px 8px; cursor: pointer; }
+.row:hover { background: var(--panel); }
+.row.sel { background: var(--panel-2); border-color: rgba(117,204,208,0.5); }
+.row .who { display: flex; flex-direction: column; min-width: 0; }
+.row .who b { font-weight: 600; font-size: 13px; }
+.row .who small { color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.avatar { width: 20px; height: 25px; object-fit: contain; }
+.avatar.big { width: 48px; height: 60px; }
+.chip { font-size: 10.5px; text-transform: uppercase; letter-spacing: .6px; padding: 3px 7px; border-radius: 999px; background: var(--panel-2); color: var(--muted); white-space: nowrap; }
+.chip.working, .chip.commute { background: rgba(117,204,208,0.18); color: var(--aqua); }
+.chip.report { background: rgba(31,138,91,0.25); color: #8FE0B5; }
+.chip.error { background: rgba(231,112,111,0.25); color: #FFB3B2; }
+.chip.leisure { background: rgba(246,212,99,0.18); color: #F6D463; }
+
+.insp-head { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+.insp-head h3 { margin: 0; font: 600 18px/1.1 var(--display); }
+.insp-head .sub { color: var(--muted); font-size: 12px; }
+.eyebrow { color: var(--aqua); font-size: 10.5px; text-transform: uppercase; letter-spacing: 1.2px; }
+.about { margin: 4px 0 10px; color: var(--text); font-size: 13px; }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 10px; font-size: 12.5px; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
+.task { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.actions { display: flex; gap: 8px; margin: 6px 0 12px; }
+aside h4 { margin: 8px 0 6px; font: 600 12px var(--body); text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+.history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.history li { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; }
+.history li.click { cursor: pointer; border-radius: 8px; padding: 4px; }
+.history li.click:hover { background: var(--panel); }
+.history b { font-weight: 600; display: block; }
+.history small { color: var(--muted); display: block; font-size: 11.5px; }
+.history .muted { color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; margin-top: 4px; background: var(--muted); }
+.dot.ok, .dot.done, .dot.join { background: var(--ok); }
+.dot.bad, .dot.error { background: var(--salmon); }
+.dot.start, .dot.live { background: var(--aqua); }
+.dot.info { background: var(--muted); }
+.empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+.feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.feed li { display: flex; gap: 8px; align-items: flex-start; }
+.feed time { color: var(--aqua); font-variant-numeric: tabular-nums; flex: none; font-size: 11px; margin-top: 1px; }
+
+/* modal */
+#modal { position: fixed; inset: 0; background: rgba(0,10,20,0.6); display: none; align-items: center; justify-content: center; z-index: 20; }
+#modal.open { display: flex; }
+.card { background: var(--navy); border: 1px solid var(--line); border-radius: 14px; width: min(520px, calc(100% - 32px)); padding: 20px 22px; box-shadow: 0 30px 80px rgba(0,0,0,0.5); }
+.card h2 { font: 600 20px/1.2 var(--display); margin: 0 0 4px; }
+.card p.lead { color: var(--muted); margin: 0 0 14px; font-size: 13px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.form-grid .full { grid-column: 1 / -1; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.field input, .field select, .field textarea { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--text); }
+.field textarea { min-height: 60px; resize: vertical; }
+.preview { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; }
+.preview img { width: 48px; height: 60px; object-fit: contain; }
+.preview small { color: var(--muted); }
+.card .actions { justify-content: flex-end; margin: 14px 0 0; }
+
+/* walk mode avatar picker: shares the add-agent modal look */
+#walk-modal { position: fixed; inset: 0; background: rgba(0,10,20,0.6); display: none; align-items: center; justify-content: center; z-index: 20; }
+#walk-modal.open { display: flex; }
+#walk-modal .card { width: min(440px, calc(100% - 32px)); }
+.kind-row { display: flex; gap: 14px; }
+.kind { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; cursor: pointer; }
+.kind input { accent-color: var(--aqua); margin: 0; }
+.swatch-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch-btn { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; padding: 0; cursor: pointer; box-shadow: 0 0 0 1px rgba(255,255,255,0.18) inset; }
+.swatch-btn:hover { transform: scale(1.08); }
+.swatch-btn.sel { border-color: #FFFFFF; box-shadow: 0 0 0 2px var(--navy), 0 0 0 4px var(--aqua); }
+#w-animal-fields[hidden] { display: none; }
+
+/* walk mode HUD (CONTRACT_V4 "UI"): only visible while body has class walk */
+.walk-ui { display: none; pointer-events: none; }
+body.walk .walk-ui { display: block; }
+body.walk #walk-prompt[hidden] { display: none; }
+#walk-hud {
+  position: absolute; z-index: 6; left: 16px; top: 16px; width: 200px;
+  background: rgba(0,45,79,0.86); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px 8px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35); font-size: 12px; backdrop-filter: blur(6px);
+}
+#walk-hud .walk-title { font: 600 14px/1.2 var(--display); margin-bottom: 8px; color: var(--text); }
+#walk-hud .walk-title::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--aqua); margin-right: 8px; vertical-align: 1px; }
+.walk-legend { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 0; align-items: center; }
+.walk-legend dt { color: var(--muted); }
+.walk-legend dd { margin: 0; display: flex; gap: 3px; align-items: center; flex-wrap: wrap; color: var(--text); }
+.walk-ui kbd, #walk-prompt kbd {
+  display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 5px; text-align: center;
+  background: var(--silver); color: var(--navy); font: 600 10.5px/1.5 var(--body); border-bottom: 2px solid #B7C3CC;
+}
+.walk-change { display: inline-block; margin-top: 8px; color: var(--aqua); font-size: 11.5px; text-decoration: none; pointer-events: auto; }
+.walk-change:hover { text-decoration: underline; }
+#walk-prompt {
+  position: absolute; z-index: 6; left: 50%; bottom: 64px; transform: translateX(-50%);
+  background: rgba(0,45,79,0.92); border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px 7px 9px;
+  font-size: 13px; color: var(--text); white-space: nowrap; box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  display: none; align-items: center; gap: 8px;
+}
+body.walk #walk-prompt:not([hidden]) { display: flex; }
+#walk-prompt kbd { font-size: 11.5px; padding: 2px 7px; }
+body.walk #cam-hint, body.walk #tip, body.walk #btn-reset-view { display: none; }
+body.walk #stage-host > canvas { cursor: default; }
+/* Any walk HUD piece with the hidden attribute stays hidden, whatever the renderer shows */
+body.walk .walk-ui[hidden] { display: none; }
+#walk-hud .walk-legend dd { line-height: 1.5; }
+
+/* Version 5 walk HUD (CONTRACT_V5 "UI"): fade overlay, golf HUD, power meter, message banner, interior hint.
+   Layering: #fade 4 (above the label overlay, below the HUD), golf and interior pieces 6. */
+#fade {
+  position: absolute; inset: 0; z-index: 4; pointer-events: none;
+  background: var(--navy); opacity: 0; transition: none;
+}
+.golf-ui { font-family: var(--body); color: var(--silver); }
+#golf-hud {
+  position: absolute; z-index: 6; right: 16px; top: 16px; min-width: 300px;
+  background: rgba(0,45,79,0.9); border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35); backdrop-filter: blur(6px);
+}
+/* Version 10 (CONTRACT_V10 "Thread National"): the course name heads the HUD as an aqua eyebrow. */
+#golf-hud .golf-course { color: var(--aqua); font: 600 10.5px/1.4 var(--body); text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 2px; }
+#golf-hud .golf-title { font: 600 15px/1.25 var(--display); color: #FFFFFF; white-space: nowrap; }
+#golf-hud .golf-club-line { display: flex; align-items: baseline; gap: 12px; margin-top: 2px; font: 500 12px/1.4 var(--body); color: var(--silver); }
+#golf-hud .golf-keys { margin-left: auto; opacity: 0.6; letter-spacing: 0.12em; font-size: 11px; }
+/* The nine-hole card: tighter cells so nine columns plus the total fit the HUD. */
+.golf-card { border-collapse: collapse; margin-top: 8px; width: 100%; font: 500 11.5px/1.4 var(--body); color: var(--silver); font-variant-numeric: tabular-nums; }
+.golf-card th { font: 600 10.5px/1.4 var(--body); letter-spacing: 0.04em; text-transform: none; color: var(--muted); text-align: center; padding: 2px 4px; border-bottom: 1px solid var(--line); }
+.golf-card th:first-child, .golf-card td:first-child { text-align: left; padding-left: 0; }
+.golf-card th:last-child, .golf-card td:last-child { padding-right: 0; padding-left: 6px; border-left: 1px solid var(--line); }
+.golf-card td { text-align: center; padding: 2px 4px; min-width: 18px; }
+.golf-card td.cur { box-shadow: inset 0 -2px 0 var(--aqua); }
+.golf-card .golf-you td { color: var(--text); }
+/* Stroke count color by term: under par salmon, par white, bogey silver, worse dim */
+.golf-card td.t-under { color: var(--salmon); font-weight: 600; }
+.golf-card td.t-par { color: #FFFFFF; }
+.golf-card td.t-bogey { color: var(--silver); }
+.golf-card td.t-worse { color: #B9C4CC; }
+#golf-hud .golf-range { margin-top: 8px; font: 500 12px/1.5 var(--body); color: var(--silver); }
+#golf-hud .golf-range[hidden], #golf-hud .golf-card[hidden] { display: none; }
+/* Version 8 (CONTRACT_V8 "HUD"): the round layout. The renderer unhides #golf-round-line during a round; everything
+   that follows it in the HUD swaps by sibling rules, so practice (round line hidden) keeps the single hole card and
+   the round shows the Round row, the running to par line and the cart hint. */
+#golf-hud .golf-round-line { color: #FFFFFF; }
+#golf-hud .golf-round-line[hidden] { display: none; }
+#golf-hud #golf-round-line:not([hidden]) ~ #golf-title { display: none; }
+#golf-hud #golf-round-line[hidden] ~ .golf-card .golf-round { display: none; }
+#golf-hud #golf-round-line:not([hidden]) ~ .golf-card .golf-you { display: none; }
+#golf-hud #golf-round-line[hidden] ~ .golf-to-par-line { display: none; }
+.golf-card .golf-round td { color: var(--text); }
+.golf-card .golf-round td:first-child { color: var(--aqua); font-weight: 600; }
+#golf-hud .golf-to-par-line {
+  display: flex; align-items: baseline; gap: 6px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line);
+  font: 500 12px/1.4 var(--body); color: var(--silver);
+}
+#golf-hud .golf-to-par-line b { font: 600 14px/1.2 var(--display); color: #FFFFFF; font-variant-numeric: tabular-nums; }
+#golf-hud .golf-to-par-line b.t-under { color: var(--salmon); }
+#golf-hud .golf-to-par-line b.t-worse { color: #B9C4CC; }
+#golf-hud .golf-round-time { margin-left: auto; opacity: 0.7; font-variant-numeric: tabular-nums; }
+#golf-hud .golf-cart-line {
+  display: flex; align-items: center; gap: 6px; margin-top: 8px; font: 500 12px/1.4 var(--body); color: var(--silver);
+}
+#golf-hud .golf-cart-line kbd { font-size: 10.5px; }
+#golf-hud .golf-cart-line[hidden] { display: none; }
+#golf-power {
+  position: absolute; z-index: 6; left: 50%; bottom: 96px; transform: translateX(-50%); width: 260px; height: 14px;
+}
+#golf-power.dim { opacity: 0.5; }
+#golf-power .golf-track {
+  position: relative; width: 260px; height: 14px; border-radius: 7px; overflow: hidden;
+  background: rgba(0,45,79,0.55); border: 1px solid var(--silver); box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+}
+#golf-power .golf-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--aqua); border-radius: 7px; }
+#golf-power .golf-bar.hot { background: var(--salmon); }
+/* Tick at 0.7 (the aim preview) and the tee-shot sweet spot band from 0.6 to 0.75 (driver only) */
+#golf-power .golf-tick { position: absolute; left: 70%; top: 0; bottom: 0; width: 1px; background: #FFFFFF; opacity: 0.9; }
+#golf-power .golf-band { position: absolute; left: 60%; width: 15%; top: 0; bottom: 0; background: rgba(226,233,238,0.22); }
+#golf-power .golf-band[hidden] { display: none; }
+#golf-msg {
+  position: absolute; z-index: 6; left: 50%; top: 38%; transform: translate(-50%, -50%); max-width: calc(100% - 48px);
+  background: rgba(0,45,79,0.92); border: 1px solid var(--line); border-radius: 14px; padding: 12px 26px;
+  font: 600 26px/1.25 var(--display); color: #FFFFFF; text-align: center; white-space: pre-line;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.45);
+}
+#golf-msg small { display: block; margin-top: 8px; font: 500 14px/1.4 var(--body); color: var(--silver); }
+#golf-msg kbd { font-size: 12px; padding: 2px 7px; margin: 0 4px 0 10px; vertical-align: 1px; }
+#golf-msg kbd:first-child { margin-left: 0; }
+#interior-hint {
+  position: absolute; z-index: 6; left: 50%; top: 16px; transform: translateX(-50%);
+  background: rgba(0,45,79,0.86); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px;
+  font-size: 11.5px; color: var(--silver); white-space: nowrap; box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+body.board #golf-power { bottom: 140px; }
+
+/* Version 6 subway runner HUD (CONTRACT_V6 "UI", docs/SUBWAY_DESIGN.md "HUD and summary").
+   Everything with class runner-ui is hidden unless body has class subway; the renderer writes the
+   values and toggles the hidden attributes. Layering: #runner-flash 5, #runner-hud and #runner-center 6. */
+.runner-ui { display: none; pointer-events: none; }
+body.subway .runner-ui { display: block; }
+body.subway .runner-ui[hidden], body.subway .runner-ui [hidden] { display: none; }
+/* The runner replaces the town view: the walk HUD and prompt step aside while it runs. */
+body.subway #walk-hud, body.subway #walk-prompt, body.walk.subway #walk-prompt:not([hidden]), body.subway #ticker, body.subway #cam-hint { display: none; }
+/* The town overlay (agent tags and speech bubbles) is hidden too, so nothing from the town shows over the runner scene. */
+body.subway #overlay { display: none; }
+#runner-flash {
+  position: absolute; inset: 0; z-index: 5; background: rgba(231,112,111,0.35); opacity: 0; transition: opacity .4s ease-out;
+}
+#runner-flash.hit { opacity: 1; transition: none; }
+#runner-hud { position: absolute; inset: 0; z-index: 6; padding: 18px; color: #FFFFFF; }
+.runner-top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: start; gap: 16px; }
+.runner-stat { display: flex; flex-direction: column; gap: 6px; }
+.runner-right { align-items: flex-end; }
+.runner-mid { flex-direction: row; align-items: center; gap: 8px; }
+.runner-label { font: 500 11px/1.2 var(--body); color: var(--silver); opacity: 0.85; letter-spacing: 0.04em; }
+#runner-dist { font: 600 30px/1.1 var(--display); color: #FFFFFF; text-shadow: 0 1px 3px rgba(0,45,79,0.6); font-variant-numeric: tabular-nums; }
+.runner-coin { width: 14px; height: 14px; border-radius: 50%; background: var(--aqua); box-shadow: 0 0 0 2px #F8F6F0; display: inline-block; }
+.runner-coin.gold, body.subway .runner-mid.double .runner-coin { background: #F6D463; }
+#runner-coins { font: 600 24px/1.1 var(--display); color: #FFFFFF; text-shadow: 0 1px 3px rgba(0,45,79,0.6); font-variant-numeric: tabular-nums; }
+#runner-coins.pulse { animation: coin-pulse .12s ease-out; }
+@keyframes coin-pulse { from { transform: scale(1.2); } to { transform: scale(1); } }
+#runner-best { font: 500 13px/1.3 var(--body); color: var(--silver); text-shadow: 0 1px 3px rgba(0,45,79,0.6); transition: color .3s; }
+#runner-best.new { color: var(--salmon); font-weight: 600; }
+.runner-pill {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 180px; height: 26px; padding: 0 10px;
+  border-radius: 13px; background: rgba(0,45,79,0.85); font: 600 12px/1 var(--body); color: #FFFFFF; margin-top: 2px;
+}
+.runner-pill.outline { width: auto; min-width: 72px; justify-content: center; background: transparent; border: 1.5px solid var(--aqua); color: var(--aqua); }
+.runner-bar { width: 90px; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.14); overflow: hidden; flex: none; }
+.runner-bar i { display: block; height: 100%; width: 100%; background: var(--aqua); border-radius: 3px; transition: width .1s linear; }
+.runner-chip { display: inline-block; width: max-content; padding: 3px 9px; border-radius: 999px; font: 700 12px/1.2 var(--display); }
+.runner-chip.gold { background: #F6D463; color: var(--navy); }
+#runner-warn { position: absolute; left: 50%; bottom: 14%; transform: translateX(-50%); display: flex; gap: 8px; }
+.runner-slot { width: 80px; height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; opacity: 0; }
+.runner-slot.on { opacity: 1; animation: warn-blink .25s steps(1) infinite; }
+@keyframes warn-blink { 50% { opacity: 0.25; } }
+.runner-chevron { width: 0; height: 0; border-left: 14px solid transparent; border-right: 14px solid transparent; border-top: 14px solid var(--salmon); display: block; }
+.runner-slot span { font: 700 12px/1.2 var(--body); color: #FFFFFF; text-shadow: 0 1px 3px rgba(0,45,79,0.6); }
+#runner-center { position: absolute; inset: 0; z-index: 6; }
+body.subway #runner-center { display: flex; align-items: center; justify-content: center; }
+#runner-count {
+  font: 700 120px/1 var(--display); color: #FFFFFF; text-shadow: 0 4px 18px rgba(0,45,79,0.7);
+  animation: count-in .25s ease-out;
+}
+#runner-count.go { font-size: 72px; color: var(--aqua); }
+@keyframes count-in { from { transform: scale(1.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.runner-card {
+  pointer-events: auto; width: 320px; padding: 20px 24px; border-radius: 14px; background: rgba(0,45,79,0.94);
+  box-shadow: inset 0 0 0 1px rgba(226,233,238,0.2), 0 16px 48px rgba(0,0,0,0.45); color: #FFFFFF;
+  animation: card-in .2s ease-out;
+}
+@keyframes card-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.runner-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.runner-card h3 { margin: 0; font: 600 28px/1.1 var(--display); color: #FFFFFF; }
+.runner-badge { font: 700 11px/1.2 var(--body); color: #FFFFFF; background: var(--salmon); padding: 3px 9px; border-radius: 999px; text-transform: none; }
+.runner-rows { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; margin: 0 0 10px; align-items: baseline; }
+.runner-rows dt { font: 500 13px/1.3 var(--body); color: var(--silver); opacity: 0.85; }
+.runner-rows dd { margin: 0; font: 600 20px/1.2 var(--display); color: #FFFFFF; text-align: right; font-variant-numeric: tabular-nums; }
+.runner-rank { font: 500 13px/1.3 var(--body); color: var(--aqua); margin: 0 0 12px; }
+.runner-keys { display: flex; gap: 24px; font: 600 13px/1.2 var(--body); color: #FFFFFF; }
+.runner-keys span { display: flex; align-items: center; gap: 8px; }
+.runner-keys kbd {
+  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 4px;
+  border: 1px solid var(--silver); background: transparent; color: #FFFFFF; font: 600 11px/1 var(--body);
+}
+
+/* Leaderboard (CONTRACT_V6 "Leaderboard" UI): the header modal with two tabs and the compact sidebar section. */
+#leaderboard-modal { position: fixed; inset: 0; background: rgba(0,10,20,0.6); display: none; align-items: center; justify-content: center; z-index: 20; }
+#leaderboard-modal.open { display: flex; }
+#leaderboard-modal .lb-card { width: min(620px, calc(100% - 32px)); }
+.lb-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+.lb-tab { background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 5px 14px; cursor: pointer; color: var(--muted); font-size: 13px; }
+.lb-tab:hover { color: var(--text); }
+.lb-tab.sel { background: var(--aqua); color: var(--navy); border-color: transparent; font-weight: 600; }
+.lb-head, .lb-list li { display: grid; grid-template-columns: 28px 1fr 76px 130px 64px; gap: 8px; align-items: center; }
+.lb-head { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .8px; padding: 0 6px 6px; border-bottom: 1px solid var(--line); }
+.lb-list { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; }
+.lb-list li { padding: 7px 6px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.lb-list li:nth-child(-n+3) .lb-rank { color: var(--aqua); font-weight: 600; }
+.lb-rank { color: var(--muted); font-variant-numeric: tabular-nums; }
+.lb-name { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.lb-name b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lb-score { font: 600 14px/1.2 var(--display); color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+/* Version 8 (CONTRACT_V8 "Leaderboard"), version 10: the Thread National tab shows To par and the nine hole card, so
+   its detail column is wider still. */
+.lb-head.golf, .lb-list.golf li { grid-template-columns: 28px 1fr 56px 232px 52px; }
+.lb-detail, .lb-date { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lb-topar { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.lb-topar.t-under { color: var(--salmon); }
+.lb-card-line { font-variant-numeric: tabular-nums; letter-spacing: 0.02em; font-size: 11.5px; }
+.lb-date { text-align: right; }
+.lb-empty { color: var(--muted); font-size: 13px; padding: 14px 6px; }
+/* A tiny character badge: aqua circle with a letter for aliens, salmon for animals, the species in the title. */
+.lb-badge {
+  flex: none; width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  font: 700 9px/1 var(--body); color: var(--navy); background: var(--aqua); text-transform: uppercase;
+}
+.lb-badge.animal { background: var(--salmon); color: #FFFFFF; }
+#leaderboard-modal .actions .spacer { flex: 1; }
+#leaderboard-section .lb-side { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+#leaderboard-section h4 { margin: 0 0 4px; }
+.lb-mini { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.lb-mini li { display: grid; grid-template-columns: 14px 16px 1fr auto; gap: 6px; align-items: center; font-size: 12px; min-width: 0; }
+.lb-mini .lb-rank { font-size: 11px; }
+.lb-mini b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lb-mini .lb-score { font-size: 12.5px; }
+.lb-mini .lb-score small { font: 500 11px/1 var(--body); color: var(--muted); }
+.lb-mini .lb-empty { padding: 2px 0; font-size: 12px; }
+
+/* Version 11 (CONTRACT_V11 "Coins, the wallet and the shop"): the header coin counter. ui.js writes #coin-count from
+   TT.wallet and adds .pulse for 0.6 s when the count grows; the counter opens the shop. The coin disc is the runner's
+   aqua coin with a cream ring, shared by the shop balance and the price column. */
+.coin-disc { width: 12px; height: 12px; border-radius: 50%; background: var(--aqua); box-shadow: 0 0 0 2px #F8F6F0; display: inline-block; flex: none; }
+.coin-btn { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 10px; font-variant-numeric: tabular-nums; }
+.coin-btn b { font: 600 14px/1 var(--display); color: var(--text); }
+.coin-btn.pulse { animation: coin-grow .6s ease-out; border-color: rgba(117,204,208,0.7); }
+@keyframes coin-grow {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(117,204,208,0.7); }
+  30% { transform: scale(1.12); }
+  100% { transform: scale(1); box-shadow: 0 0 0 10px rgba(117,204,208,0); }
+}
+.coin-btn.pulse b { color: var(--aqua); }
+
+/* Version 11 (CONTRACT_V11 "The minimap"): the slot in the bottom-right corner over the view, above #cam-hint and the
+   ticker, below the tooltip. js/minimap.js appends its canvas; the slot itself lets pointer events through, the canvas
+   takes them (the wheel over the map zooms it). Shown while walking; the renderer hides it with the hidden attribute in
+   orbit, board mode, interiors and the subway. 200 px, 160 on narrow screens. */
+#minimap {
+  position: absolute; z-index: 6; right: 16px; bottom: 56px; width: 200px; height: 200px;
+  pointer-events: none; border-radius: 14px; overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4), 0 0 0 3px var(--navy), 0 0 0 4px rgba(255,255,255,0.14);
+  background: rgba(0,45,79,0.85);
+}
+#minimap canvas { display: block; width: 100%; height: 100%; pointer-events: auto; border-radius: 14px; }
+body.walk #minimap:not([hidden]) { display: block; }
+body.walk #minimap[hidden], body.subway #minimap, body.board #minimap { display: none; }
+@media (max-width: 980px) {
+  #minimap { width: 160px; height: 160px; right: 10px; bottom: 56px; }
+}
+
+/* Version 11: the runner card's Shop button (the start screen's way into the shop) is clickable inside the card. */
+.runner-keys .runner-shop { pointer-events: auto; margin-left: auto; border-color: var(--aqua); color: var(--aqua); background: transparent; }
+.runner-keys .runner-shop:hover { background: rgba(117,204,208,0.14); }
+
+/* Version 11 (CONTRACT_V11 "Coins, the wallet and the shop"): the shop modal. Same backdrop and card as the leaderboard;
+   three tabs, a list of rows (icon, name and line, price, action), a note line for refusals and receipts. */
+#shop-modal { position: fixed; inset: 0; background: rgba(0,10,20,0.6); display: none; align-items: center; justify-content: center; z-index: 21; }
+#shop-modal.open { display: flex; }
+#shop-modal .shop-card { width: min(640px, calc(100% - 32px)); max-height: calc(100% - 32px); display: flex; flex-direction: column; }
+.shop-head { display: flex; align-items: flex-start; gap: 14px; }
+.shop-head > div:first-child { flex: 1; min-width: 0; }
+.shop-head .lead { margin-bottom: 10px; }
+.shop-balance {
+  display: inline-flex; align-items: center; gap: 8px; flex: none; padding: 7px 12px 7px 10px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--line); font-variant-numeric: tabular-nums;
+}
+.shop-balance b { font: 600 15px/1 var(--display); color: var(--text); }
+.shop-tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.shop-tab { background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 5px 14px; cursor: pointer; color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+.shop-tab:hover { color: var(--text); }
+.shop-tab.sel { background: var(--aqua); color: var(--navy); border-color: transparent; font-weight: 600; }
+.shop-held { font: 700 10px/1 var(--body); background: var(--salmon); color: #FFFFFF; padding: 3px 6px; border-radius: 999px; }
+.shop-tab.sel .shop-held { background: var(--navy); color: var(--aqua); }
+.shop-list { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; min-height: 120px; max-height: 56vh; border-top: 1px solid var(--line); }
+.shop-item {
+  display: grid; grid-template-columns: 40px 1fr auto auto; gap: 12px; align-items: center;
+  padding: 10px 6px; border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.shop-item.equipped { background: rgba(117,204,208,0.08); }
+.shop-item.shake { animation: shop-shake .35s ease-out; }
+@keyframes shop-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 55% { transform: translateX(4px); } 80% { transform: translateX(-2px); } }
+.shop-icon {
+  width: 40px; height: 40px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden;
+}
+.shop-icon::before { content: ''; position: absolute; inset: 0; background: var(--aqua); opacity: 0.12; }
+.shop-icon.hoverboard::after { content: ''; width: 26px; height: 8px; border-radius: 4px; background: var(--aqua); box-shadow: 0 6px 0 -2px rgba(117,204,208,0.35); position: relative; }
+.shop-icon.magnet::after { content: ''; width: 14px; height: 14px; border: 5px solid var(--salmon); border-top: 0; border-radius: 0 0 12px 12px; position: relative; }
+.shop-icon.jetpack::after { content: ''; width: 10px; height: 20px; border-radius: 5px 5px 2px 2px; background: var(--silver); box-shadow: 0 22px 0 -6px var(--salmon); position: relative; }
+.shop-icon.multiplier::after { content: '2x'; font: 700 14px/1 var(--display); color: #F6D463; position: relative; }
+.shop-icon.hat-cap::after, .shop-icon.hat-beanie::after, .shop-icon.hat-crown::after, .shop-icon.hat-cowboy::after, .shop-icon.hat-visor::after {
+  content: ''; position: relative; width: 20px; height: 12px; border-radius: 10px 10px 2px 2px; background: var(--silver);
+}
+.shop-icon.hat-cap::after { background: var(--navy); box-shadow: 0 0 0 1px var(--silver), 8px 8px 0 -3px var(--navy); }
+.shop-icon.hat-beanie::after { background: var(--salmon); border-radius: 10px 10px 4px 4px; }
+.shop-icon.hat-crown::after { background: #F6D463; border-radius: 2px; clip-path: polygon(0 100%, 0 20%, 25% 60%, 50% 0, 75% 60%, 100% 20%, 100% 100%); }
+.shop-icon.hat-cowboy::after { background: #E8DCC2; width: 14px; box-shadow: 0 6px 0 2px #E8DCC2; }
+.shop-icon.hat-visor::after { background: var(--aqua); height: 6px; border-radius: 3px 3px 8px 8px; }
+.shop-swatch { width: 22px; height: 22px; border-radius: 50%; display: block; box-shadow: 0 0 0 2px rgba(255,255,255,0.25) inset; position: relative; }
+.shop-body { min-width: 0; }
+.shop-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13.5px; }
+.shop-name b { font-weight: 600; }
+.shop-badge { font: 600 10px/1.2 var(--body); text-transform: uppercase; letter-spacing: .6px; padding: 2px 7px; border-radius: 999px; }
+.shop-badge.owned { background: var(--panel-2); color: var(--muted); }
+.shop-badge.equipped { background: var(--aqua); color: var(--navy); }
+.shop-badge.held { background: var(--salmon); color: #FFFFFF; }
+.shop-slot { color: var(--muted); font-size: 11px; }
+.shop-about { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.shop-price { display: inline-flex; align-items: center; gap: 6px; font: 600 14px/1 var(--display); color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.shop-action { min-width: 92px; display: flex; justify-content: flex-end; }
+.shop-act.short { border-color: rgba(231,112,111,0.6); color: #FFB3B2; opacity: 0.85; white-space: nowrap; }
+.shop-note { margin-top: 10px; padding: 8px 12px; border-radius: 10px; font-size: 12.5px; background: var(--panel); border: 1px solid var(--line); color: var(--text); }
+.shop-note.ok { border-color: rgba(117,204,208,0.6); color: var(--aqua); }
+.shop-note.warn { border-color: rgba(231,112,111,0.6); color: #FFB3B2; }
+.shop-note[hidden] { display: none; }
+.shop-empty { color: var(--muted); font-size: 13px; padding: 14px 6px; }
+#shop-modal .actions .spacer { flex: 1; }
+
+/* board mode */
+#board-wide { display: none; }
+body.board { grid-template-columns: 1fr; grid-template-areas: "head" "stage"; }
+body.board aside { display: none; }
+body.board header .controls > *:not(#btn-board) { display: none; }
+body.board #stage-wrap { padding: 20px; }
+body.board #stage-host { padding-bottom: 50px; }
+body.board #board-wide {
+  display: flex; flex-direction: column; width: 320px; flex: none; min-height: 0;
+  background: rgba(0,45,79,0.92); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+}
+#board-wide h2 { font: 600 18px/1.2 var(--display); margin: 0 0 10px; }
+#board-wide .board li { font-size: 13px; padding: 6px 0; }
+#board-wide .feed { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); overflow: auto; min-height: 0; }
+body.board #ticker { font-size: 15px; padding: 10px 20px 10px 14px; bottom: 8px; }
+@media (max-width: 980px) {
+  body { grid-template-columns: 1fr; grid-template-rows: 56px 1fr 300px; grid-template-areas: "head" "stage" "side"; }
+  aside { border-left: 0; border-top: 1px solid var(--line); }
+  header .clock { display: none; }
+}
+/* Phone width (version 11): the header controls scroll sideways so the coin counter and the buttons stay reachable; the
+   shop rows stack the price and the action under the text; the minimap keeps clear of the ticker. */
+@media (max-width: 640px) {
+  header { gap: 10px; padding: 0 12px; }
+  header .tag { display: none; }
+  .controls { overflow-x: auto; overflow-y: hidden; flex: none; max-width: calc(100% - 120px); scrollbar-width: none; }
+  .controls::-webkit-scrollbar { display: none; }
+  .controls > label { flex: none; }
+  .controls .btn { flex: none; white-space: nowrap; }
+  #shop-modal .shop-card { width: calc(100% - 16px); max-height: calc(100% - 16px); padding: 16px 14px; }
+  .shop-head { flex-direction: column; gap: 8px; }
+  .shop-item { grid-template-columns: 36px 1fr; grid-template-areas: "icon body" "price action"; gap: 8px 10px; }
+  .shop-icon { grid-area: icon; width: 36px; height: 36px; }
+  .shop-body { grid-area: body; }
+  .shop-price { grid-area: price; }
+  .shop-action { grid-area: action; min-width: 0; }
+  .shop-list { max-height: none; }
+  #minimap { bottom: 66px; }
+}

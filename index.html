@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thread Town</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Kanit:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+{ "imports": {
+  "three": "./node_modules/three/build/three.module.js",
+  "three/addons/": "./node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>Thread Town</h1>
+      <span class="tag">AI agents at work</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="clock"><b id="clock">--:--</b><span id="daypart">Day</span></div>
+    <div class="controls">
+      <label>Lighting
+        <select id="lighting">
+          <option value="auto">Auto</option>
+          <option value="day">Day</option>
+          <option value="night">Night</option>
+        </select>
+      </label>
+      <label><input type="checkbox" class="switch" id="toggle-sim" checked> Simulate runs</label>
+      <label><input type="checkbox" class="switch" id="toggle-demo" checked> Demo agents</label>
+      <label>Camera
+        <select id="camera-mode">
+          <option value="free">Free roam</option>
+          <option value="orbit">Orbit</option>
+        </select>
+      </label>
+      <label><input type="checkbox" class="switch" id="toggle-cinematic"> Cinematic camera</label>
+      <button class="btn primary" id="btn-add">Add an agent</button>
+      <button class="btn" id="btn-walk" title="Walk the town in third person (Tab)">Walk the town</button>
+      <button class="btn" id="btn-leaderboard" title="Subway and Thread National records">Leaderboard</button>
+      <!-- Version 11 (CONTRACT_V11 "Coins, the wallet and the shop"): the coin counter. ui.js writes the count from
+           TT.wallet and adds .pulse when it grows; clicking it opens the shop (TT.shop). -->
+      <button class="btn coin-btn" id="coin-counter" title="Your coins. Open the shop"><span class="coin-disc"></span><b id="coin-count">0</b></button>
+      <button class="btn" id="btn-board">Board mode</button>
+    </div>
+  </header>
+
+  <div id="stage-wrap">
+    <div id="stage-host">
+      <div id="ticker"><span class="dot info"></span>Loading the town…</div>
+      <div id="cam-hint" title="Camera controls">Drag to move · Right-drag to rotate · Scroll to zoom · WASD or arrows glide · Q and E turn · Tab to walk the town</div>
+      <div id="tip" hidden></div>
+      <button class="btn small" id="btn-reset-view" hidden>Reset view</button>
+      <!-- Walk mode HUD (CONTRACT_V4 "UI"). The renderer writes the prompt each frame; the chase camera is the only walk view (CONTRACT_V7). -->
+      <div id="walk-hud" class="walk-ui">
+        <div class="walk-title">Walk mode</div>
+        <dl class="walk-legend">
+          <dt>Move</dt><dd><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dd>
+          <dt>Look</dt><dd>Mouse</dd>
+          <dt>Run</dt><dd><kbd>Shift</kbd></dd>
+          <dt>Jump or dive</dt><dd><kbd>Space</kbd></dd>
+          <dt>Interact</dt><dd><kbd>E</kbd></dd>
+          <dt>Golf</dt><dd>hold <kbd>Space</kbd> to swing, <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> clubs, <kbd>X</kbd> leave</dd>
+          <dt>Cart</dt><dd><kbd>W</kbd><kbd>S</kbd> drive, <kbd>A</kbd><kbd>D</kbd> steer, <kbd>E</kbd> in or out, <kbd>Tab</kbd> drive to ball</dd>
+          <dt>Scooter</dt><dd><kbd>W</kbd><kbd>S</kbd> ride, <kbd>A</kbd><kbd>D</kbd> steer, <kbd>E</kbd> hop off</dd>
+          <dt>Hoverboard</dt><dd><kbd>H</kbd> summon or hop off, <kbd>Shift</kbd> boost</dd>
+          <dt>Boat</dt><dd><kbd>E</kbd> take the boat, <kbd>W</kbd><kbd>S</kbd> throttle, <kbd>A</kbd><kbd>D</kbd> steer, <kbd>E</kbd> tie up</dd>
+          <dt>Map</dt><dd><kbd>M</kbd> show or hide</dd>
+          <dt>Subway</dt><dd><kbd>A</kbd><kbd>D</kbd> lanes, <kbd>W</kbd> jump, <kbd>S</kbd> duck</dd>
+          <dt>View</dt><dd><kbd>V</kbd> near or far</dd>
+          <dt>Exit</dt><dd><kbd>Esc</kbd> twice</dd>
+        </dl>
+        <a href="#" id="walk-change" class="walk-change">Change character</a>
+      </div>
+      <div id="walk-prompt" class="walk-ui" hidden><kbd>E</kbd> Interact</div>
+      <!-- Version 5 walk HUD (CONTRACT_V5 "UI"). All pointer-events none. The renderer toggles the hidden
+           attribute and writes the text; #fade is always present and the renderer animates its opacity. -->
+      <div id="fade" aria-hidden="true"></div>
+      <div id="golf-hud" class="walk-ui golf-ui" hidden>
+        <!-- Version 10 (CONTRACT_V10 "Thread National"): the course name heads the HUD; ui.js writes it from the sim. -->
+        <div class="golf-course" id="golf-course">Thread National</div>
+        <!-- Version 8 (CONTRACT_V8 "HUD"): the round line replaces the practice title while a round is on. The renderer
+             unhides #golf-round-line for a round and writes it; css then swaps the practice title and You row for the
+             round row and the to par line. Practice (round line hidden) keeps the version 7 layout. -->
+        <div class="golf-title golf-round-line" id="golf-round-line" hidden>Round · Hole 1 of 9 · Par 4 · Stroke 0</div>
+        <div class="golf-title" id="golf-title">Hole 1 · Par 4 · Stroke 0</div>
+        <div class="golf-club-line"><span id="golf-club">Driver</span><span class="golf-keys">1 2 3</span></div>
+        <!-- The card follows state.golf.holes (CONTRACT_V7). ui.js rebuilds these rows from the sim at init and the
+             renderer rebuilds them again if the hole count changes; this markup is the nine hole placeholder for
+             Thread National (pars 4 3 5 4 4 3 5 3 4, par 35). The Round row (version 8) carries the round card cells
+             golf-card-1..9 and golf-card-total; the renderer writes strokes there and the running to par in #golf-to-par. -->
+        <table class="golf-card" id="golf-card">
+          <thead><tr><th>Hole</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th><th>9</th><th>Total</th></tr></thead>
+          <tbody>
+            <tr class="golf-par"><td>Par</td><td>4</td><td>3</td><td>5</td><td>4</td><td>4</td><td>3</td><td>5</td><td>3</td><td>4</td><td>35</td></tr>
+            <tr class="golf-you"><td>You</td><td id="golf-c1">·</td><td id="golf-c2">·</td><td id="golf-c3">·</td><td id="golf-c4">·</td><td id="golf-c5">·</td><td id="golf-c6">·</td><td id="golf-c7">·</td><td id="golf-c8">·</td><td id="golf-c9">·</td><td id="golf-total">·</td></tr>
+            <tr class="golf-round"><td>Round</td><td id="golf-card-1">·</td><td id="golf-card-2">·</td><td id="golf-card-3">·</td><td id="golf-card-4">·</td><td id="golf-card-5">·</td><td id="golf-card-6">·</td><td id="golf-card-7">·</td><td id="golf-card-8">·</td><td id="golf-card-9">·</td><td id="golf-card-total">·</td></tr>
+          </tbody>
+        </table>
+        <div class="golf-to-par-line" id="golf-to-par-line">To par <b id="golf-to-par">E</b><span class="golf-round-time" id="golf-round-time">0:00</span></div>
+        <div class="golf-cart-line" id="golf-cart-hint" hidden><kbd>Tab</kbd> Drive to ball</div>
+        <div class="golf-range" id="golf-range" hidden>
+          <div id="golf-best">Best carry: 0 tiles</div>
+          <div id="golf-balls">Balls hit: 0</div>
+        </div>
+      </div>
+      <div id="golf-power" class="walk-ui golf-ui" hidden>
+        <div class="golf-track">
+          <i class="golf-band" id="golf-band"></i>
+          <i class="golf-tick"></i>
+          <i class="golf-bar" id="golf-bar"></i>
+        </div>
+      </div>
+      <div id="golf-msg" class="walk-ui golf-ui" hidden></div>
+      <div id="interior-hint" class="walk-ui" hidden>Inside. Walk to the door to leave</div>
+      <!-- Version 11 (CONTRACT_V11 "The minimap"): the minimap slot, bottom-right over the view. js/minimap.js appends its
+           canvas here (the renderer wires it); the slot itself passes pointer events through and only the canvas takes them. -->
+      <div id="minimap" class="walk-ui" aria-label="Minimap"></div>
+      <!-- Version 6 subway runner HUD (CONTRACT_V6 "UI", docs/SUBWAY_DESIGN.md "HUD and summary"). Shown only under
+           body.subway; the renderer writes the numbers each frame and toggles the hidden attributes. -->
+      <div id="runner-flash" class="runner-ui" aria-hidden="true"></div>
+      <div id="runner-hud" class="runner-ui">
+        <div class="runner-top">
+          <div class="runner-stat runner-left">
+            <div class="runner-label">Distance</div>
+            <div id="runner-dist">0 m</div>
+            <div id="runner-power" class="runner-pill" hidden><span id="runner-power-kind">Magnet</span><span class="runner-bar"><i id="runner-power-bar"></i></span></div>
+            <div id="runner-shield" class="runner-pill outline" hidden>Shield</div>
+            <div id="runner-mult" class="runner-chip gold" hidden>2x</div>
+          </div>
+          <div class="runner-stat runner-mid">
+            <span id="runner-coin-disc" class="runner-coin"></span><span id="runner-coins">0</span>
+          </div>
+          <div class="runner-stat runner-right">
+            <div id="runner-best">Best 0 m</div>
+          </div>
+        </div>
+        <div id="runner-warn">
+          <div class="runner-slot" data-lane="0"><i class="runner-chevron"></i><span>Train</span></div>
+          <div class="runner-slot" data-lane="1"><i class="runner-chevron"></i><span>Train</span></div>
+          <div class="runner-slot" data-lane="2"><i class="runner-chevron"></i><span>Train</span></div>
+        </div>
+      </div>
+      <div id="runner-center" class="runner-ui">
+        <div id="runner-count" hidden>3</div>
+        <div id="runner-over" class="runner-card" hidden>
+          <div class="runner-card-head">
+            <h3>Game over</h3>
+            <span id="runner-over-newbest" class="runner-badge" hidden>New best</span>
+          </div>
+          <dl class="runner-rows">
+            <dt>Distance</dt><dd id="runner-over-dist">0 m</dd>
+            <dt>Coins</dt><dd id="runner-over-coins">0</dd>
+            <dt>Best</dt><dd id="runner-over-best">0 m</dd>
+            <dt>Lifetime</dt><dd id="runner-over-life">0 m</dd>
+          </dl>
+          <div id="runner-over-rank" class="runner-rank" hidden>Rank 1 of 1</div>
+          <div class="runner-keys"><span><kbd>R</kbd> Run again</span><span><kbd>E</kbd> Back to town</span><button type="button" class="btn small runner-shop" id="runner-shop">Shop</button></div>
+        </div>
+      </div>
+      <div id="insp-card">
+        <button class="close" data-close-insp aria-label="Close">×</button>
+        <div id="inspector-card"></div>
+      </div>
+    </div>
+    <div id="board-wide">
+      <h2>AI utilization by team</h2>
+      <div class="board-head"><span></span><span>Team</span><span>Runs this week</span><span>Runs</span><span>Agents</span><span></span></div>
+      <ul class="board" id="board-list-wide"></ul>
+      <ul class="feed" id="feed-wide"></ul>
+    </div>
+  </div>
+
+  <aside>
+    <section>
+      <h2>AI utilization <span class="count right">last 7 days</span></h2>
+      <div class="kpis">
+        <div class="kpi"><b id="kpi-agents">0</b><small>agents</small></div>
+        <div class="kpi"><b id="kpi-runs">0</b><small>runs</small></div>
+        <div class="kpi"><b id="kpi-active">0</b><small>working now</small></div>
+        <div class="kpi"><b id="kpi-depts">0</b><small>teams live</small></div>
+      </div>
+      <div class="board-head"><span></span><span>Team</span><span>Runs this week</span><span>Runs</span><span>Agents</span><span></span></div>
+      <ul class="board" id="board-list"></ul>
+    </section>
+    <section id="inspector-section">
+      <h2>Agent details <button class="btn small ghost right" data-close-insp id="btn-close-insp" hidden>Clear</button></h2>
+      <div id="inspector-side"></div>
+    </section>
+    <section id="leaderboard-section">
+      <h2>Leaderboard <button class="btn small ghost right" id="btn-leaderboard-side">See all</button></h2>
+      <div class="lb-side">
+        <div class="lb-side-game"><h4 data-game="subway">Subway</h4><ol class="lb-mini" id="lb-side-subway"></ol></div>
+        <div class="lb-side-game"><h4 data-game="golf">Thread National</h4><ol class="lb-mini" id="lb-side-golf"></ol></div>
+      </div>
+    </section>
+    <section class="grow">
+      <h2>Roster <span class="count" id="roster-count">0</span></h2>
+      <div class="roster" id="roster"></div>
+    </section>
+    <section class="grow">
+      <h2>Activity</h2>
+      <ul class="feed" id="feed"></ul>
+    </section>
+  </aside>
+
+  <div id="modal">
+    <form class="card" id="add-form">
+      <h2>Add an agent to the town</h2>
+      <p class="lead">Give it an alien name and tell us what it does. The alien is generated from the name, so every agent looks different.</p>
+      <div class="form-grid">
+        <label class="field">Alien name<input id="f-name" required placeholder="Zorp" maxlength="14"></label>
+        <label class="field">What it does (short title)<input id="f-role" required placeholder="Deck Stamper" maxlength="28"></label>
+        <label class="field">Department<select id="f-dept"></select></label>
+        <label class="field">Owner<input id="f-owner" placeholder="Your name"></label>
+        <label class="field">How often it runs<input id="f-cadence" placeholder="Daily 7:00am, Fridays, On request"></label>
+        <label class="field">Work animation
+          <select id="f-anim">
+            <option value="write">Writing</option>
+            <option value="build">Building</option>
+            <option value="stamp">Filing / stamping</option>
+            <option value="mail">Mailing</option>
+            <option value="scan">Scanning / reviewing</option>
+            <option value="compute">Computing / reconciling</option>
+          </select>
+        </label>
+        <label class="field full">Description<textarea id="f-about" placeholder="Restamps and files the weekly Partnership Pipeline Review deck."></textarea></label>
+        <div class="preview full"><img id="f-preview" alt=""><div><b>Your alien</b><br><small>Changes as you type the name and title.</small></div></div>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Add to the town</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Walk mode avatar picker (CONTRACT_V4 "UI"). Shown the first time Walk the town is pressed. -->
+  <div id="walk-modal">
+    <form class="card" id="walk-form">
+      <h2>Walk the town</h2>
+      <p class="lead">Pick a name and a character. You can walk the streets, talk to agents, sit at the café, swim in the pond and try any empty station.</p>
+      <div class="form-grid">
+        <label class="field full">Display name<input id="w-name" value="You" maxlength="14" placeholder="You"></label>
+        <div class="field full">
+          <span>Character</span>
+          <div class="kind-row">
+            <label class="kind"><input type="radio" name="w-kind" value="alien" checked> Alien</label>
+            <label class="kind"><input type="radio" name="w-kind" value="animal"> Animal</label>
+          </div>
+        </div>
+        <div class="field full" id="w-alien-fields">
+          <span>Color</span>
+          <div class="swatch-row" id="w-colors"></div>
+        </div>
+        <label class="field full" id="w-animal-fields" hidden>Species<select id="w-species"></select></label>
+        <!-- Version 11: the owned hats from the wallet; ui.js fills the options and hides the field when none are owned. -->
+        <label class="field full" id="w-hat-field" hidden>Hat<select id="w-hat"><option value="">No hat</option></select></label>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Start walking</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Leaderboard (CONTRACT_V6 "Leaderboard" UI). ui.js renders the list from TT.leaderboard. -->
+  <div id="leaderboard-modal">
+    <div class="card lb-card" role="dialog" aria-labelledby="lb-title">
+      <h2 id="lb-title">Leaderboard</h2>
+      <p class="lead" id="lb-lead">Best runs on the subway and the lowest nine-hole rounds at Thread National, by everyone who has walked this town.</p>
+      <div class="lb-tabs" role="tablist">
+        <button type="button" class="lb-tab sel" data-lb-tab="subway" role="tab" aria-selected="true">Subway</button>
+        <button type="button" class="lb-tab" data-lb-tab="golf" role="tab" aria-selected="false">Thread National · 9 holes</button>
+      </div>
+      <div class="lb-head"><span>#</span><span>Name</span><span id="lb-head-score">Distance</span><span id="lb-head-detail">Coins and time</span><span>Date</span></div>
+      <ol class="lb-list" id="lb-list"></ol>
+      <div class="actions">
+        <button type="button" class="btn ghost" id="lb-clear">Clear</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn primary" data-close>Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shop (CONTRACT_V11 "Coins, the wallet and the shop"). js/shop.js renders the tabs and the list into this card from
+       the wallet; the renderer creates both (TT.wallet, TT.shop) and opens it from the kiosk and the runner. -->
+  <div id="shop-modal">
+    <div class="card shop-card" role="dialog" aria-labelledby="shop-title">
+      <div class="shop-head">
+        <div>
+          <h2 id="shop-title">Thread shop</h2>
+          <p class="lead" id="shop-lead">Spend the coins you collected on the subway.</p>
+        </div>
+        <div class="shop-balance" title="Your coins"><span class="coin-disc"></span><b id="shop-coins">0</b></div>
+      </div>
+      <div class="shop-tabs" role="tablist" id="shop-tabs">
+        <button type="button" class="shop-tab sel" data-shop-tab="rides" role="tab" aria-selected="true">Rides</button>
+        <button type="button" class="shop-tab" data-shop-tab="powerups" role="tab" aria-selected="false">Power-ups</button>
+        <button type="button" class="shop-tab" data-shop-tab="looks" role="tab" aria-selected="false">Looks</button>
+      </div>
+      <ul class="shop-list" id="shop-list"></ul>
+      <div class="shop-note" id="shop-note" hidden></div>
+      <div class="actions">
+        <span class="spacer"></span>
+        <button type="button" class="btn primary" data-close>Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/data.js"></script>
+  <script src="js/sim.js"></script>
+  <script type="module" src="js/aliens3d.js"></script>
+  <script type="module" src="js/render3d.js"></script>
+  <script src="js/ui.js"></script>
+</body>
+</html>
