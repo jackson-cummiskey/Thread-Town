@@ -1244,7 +1244,14 @@ export function buildTerrain(ctx) {
        over teeBlend tiles (the island hole's landing is its green) */
     for (const ho of holes) {
       let landing;
-      if (ho.island || !ho.profile) landing = ho.plateau;
+      if (ho.island) {
+        // v12.1: the island hole's tee sits on the shore, so its box follows the shore ground (the
+        // mean of the ring two tiles out), not the island green a bank and a lake away: at the
+        // green's height it stood as a 1.2 block beside the marina footbridge
+        let s = 0, n = 0; const r0 = ho.teeBox;
+        for (let j = Math.max(0, r0.y0 - 2); j <= Math.min(rows, r0.y1 + 2); j++) for (let i = Math.max(0, r0.x0 - 2); i <= Math.min(cols, r0.x1 + 2); i++) { const k = idx(i, j); if (!wet[k]) { s += h[k]; n++; } }
+        landing = n ? s / n : ho.plateau;
+      } else if (!ho.profile) landing = ho.plateau;
       else { const s = Math.min(C.teeLanding, Math.max(0, ho.length - ho.greenR - 1)); const q = pointAt(ho.line, s); landing = profileAt(ho.profile, q.x, q.y); }
       const p = landing + ho.elev, r = ho.teeBox, R = Math.ceil(C.teeBlend);
       ho.teeHeight = p;

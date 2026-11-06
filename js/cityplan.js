@@ -453,7 +453,7 @@ const HOLES = [
     line: [[82, 110], [78, 118], [73, 126], [70, 131]], fairwayWidth: 6, greenR: 2.5,
     bunkers: [{ x: 74, y: 129, r: 1.3 }, { x: 66, y: 127, r: 1.2 }], water: [],
     story: 'Back on the west bank behind the clubhouse, a tee 0.8 up on the river bank plays down the strip between the river and the lake; the drive must carry the channel that cuts across the fairway on its way from the lake to the river, then the green sits between two bunkers.' },
-  { n: 6, name: 'The Island', par: 3, tee: { x: 60, y: 119, elev: 1.0 }, cup: { x: 45, y: 118 },
+  { n: 6, name: 'The Island', par: 3, tee: { x: 60, y: 119, elev: 0.2 }, cup: { x: 45, y: 118 },   // v12.1: a shore tee nearly flush (1.0 stood as a block beside the marina footbridge)
     line: [[60, 119], [45, 118]], fairwayWidth: 4, greenR: 2.6, collarR: 4.0,
     bunkers: [], water: [], island: { pts: ISLAND, height: 0.6 }, bridge: 'island-bridge',
     story: 'The par 3 over water: a tee 1.0 above the lake shore, eight tiles of carry to an island green with a sand collar, and a wooden footbridge from the south shore for the walk out. A ball in the lake drops on the tee side.' },
