@@ -41,12 +41,6 @@
         </label>
         <label><input type="checkbox" class="switch" id="toggle-sim" checked> Simulate runs</label>
         <label><input type="checkbox" class="switch" id="toggle-demo" checked> Demo agents</label>
-        <label>Camera
-          <select id="camera-mode">
-            <option value="free">Free roam</option>
-            <option value="orbit">Orbit</option>
-          </select>
-        </label>
         <label><input type="checkbox" class="switch" id="toggle-cinematic"> Cinematic camera</label>
         <button class="btn primary" id="btn-add">Add an agent</button>
         <button class="btn" id="btn-walk" title="Walk the town in third person (Tab)">Walk the town</button>
@@ -338,6 +332,11 @@
       </div>
     </div>
   </div>
+
+  <!-- Version 13 (CONTRACT_V13 "The town map"): the town map overlay. js/minimap.js fills this host with the card (the
+       title 'Thread Town', the hint, the close button, #map-canvas and the Go button #map-go) and toggles the open class;
+       css/style.css sizes the card at 80 percent of the view on laptops and the full view on phones. -->
+  <div id="map-modal" aria-hidden="true"></div>
 
   <script src="js/data.js"></script>
   <script src="js/sim.js"></script>

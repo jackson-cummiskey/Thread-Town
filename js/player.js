@@ -170,6 +170,7 @@ const LOOK_SENS = 0.0022;
 const LOOK_TAU = 0.045;                       // v5: look easing time constant
 const TALK_LEN = 6, BUBBLE_LEN = 5.5;
 const WADE_OUT = 0.5;                 // half a tile of 'leaving' after the center reaches land
+const WADE_DROP = 1.2;                // v12.1: the most a bank may stand above the water to wade in or climb out
 const BOARD_END_SLACK = 0.2;          // dive allowed while z <= boardEnd.y + this
 const PIER_HALF_W = 0.6, PIER_NORTH_SLACK = 0.15, PIER_SOUTH_SLACK = 0.5;
 /* Heights the renderer gives the body; mirrored here so the camera eye follows it.
@@ -398,7 +399,7 @@ export function createPlayer(ctx) {
   const tt = () => ctx.TT || (typeof globalThis !== 'undefined' ? globalThis.TT : null) || null;
 
   /* Reused leisure records (agent vocabulary, see CONTRACT_V2). */
-  const SWIM_L = { kind: 'swim', seat: null, phase: 'wading', spot: null, dive: false, until: Infinity, t0: 0 };
+  const SWIM_L = { kind: 'swim', seat: null, phase: 'wading', spot: null, dive: false, until: Infinity, t0: 0, surface: NaN };   // surface: the water level under the swimmer (v12.1)
   const SEAT_L = { kind: 'bench', seat: null, phase: 'seated', spot: null, dive: false, until: Infinity, t0: 0 };
   /* Reused station walk-out record (v5): the renderer eases the group from from to to over t 0..1. */
   const EXITING = { from: { x: 0, y: 0, z: 0 }, to: { x: 0, y: 0, z: 0 }, t: 0 };
@@ -503,6 +504,9 @@ export function createPlayer(ctx) {
   // v10 fix: waypoints (tile centers) for the walk to the ball when the straight line would cross
   // water or a building (the island hole: the walk takes the footbridge, not the lake)
   const walkWay = [];
+  // v13 (CONTRACT_V13 "Waypoints and directions"): the map route the visitor auto walks (state 'route');
+  // the same walkWay and walkTarget follower as the golf walk, at run speed, until the end or any input
+  const ROUTE = { active: false, t0: 0, left: 0, x: 0, z: 0 };
   let chargeT0 = 0, swingT0 = 0, flightT0 = 0, restAt = -1, holdNext = 'walk', holedT0 = 0, walkT0 = 0;
   let struck = false, airborne = false, clubOverride = false, swingToggle = false, charYaw = 0;
   // v8 round and cart
@@ -548,7 +552,7 @@ export function createPlayer(ctx) {
      rectangle; for walkers that rectangle carries the deck over the water. */
   function pointOK(px, pz, mayWater, swim) {
     const v = at(Math.floor(px), Math.floor(pz));
-    if (land(v)) return true;
+    if (land(v)) return !swim || !cliffFromWater(px, pz);   // v12.1: no climbing out up a cliff
     if (v === T.WA) return inPierRect(px, pz) ? !swim : mayWater;
     return false;
   }
@@ -585,10 +589,30 @@ export function createPlayer(ctx) {
     return shoreSet.has(tx * SHORE_KEY + tz);
   }
   function isShoreTile(tx, tz) {
-    if (!land(at(tx, tz))) return false;
+    const v = at(tx, tz);
+    if (!land(v)) return false;
     const listed = shoreListed(tx, tz);
-    if (listed !== null) return listed;
-    return at(tx + 1, tz) === T.WA || at(tx - 1, tz) === T.WA || at(tx, tz + 1) === T.WA || at(tx, tz - 1) === T.WA;
+    if (listed === true) return true;
+    // v12.1: swim everywhere. Any bank tile beside water is a wade-in point when the step from the
+    // tile to the water surface is a gentle one (under WADE_DROP); cliffs, bridge decks and the
+    // marina decks are not (the pier keeps its own rules). The pond list above still marks the
+    // pond's shore for the agents.
+    if (v === BR || v === DK) return false;
+    if (inPierRect(tx + 0.5, tz + 0.5)) return false;
+    let wx = -1, wz = -1;
+    if (at(tx + 1, tz) === T.WA) { wx = tx + 1; wz = tz; }
+    else if (at(tx - 1, tz) === T.WA) { wx = tx - 1; wz = tz; }
+    else if (at(tx, tz + 1) === T.WA) { wx = tx; wz = tz + 1; }
+    else if (at(tx, tz - 1) === T.WA) { wx = tx; wz = tz - 1; }
+    if (wx < 0) return false;
+    const drop = cartHeight(tx + 0.5, tz + 0.5) - waterLevel(wx + 0.5, wz + 0.5);
+    return drop <= WADE_DROP && drop >= -0.6;
+  }
+  /* v12.1: a land point a swimmer may not climb onto, the bank standing more than WADE_DROP above
+     the water the swimmer is in (the gorge walls under the bluff, the island's rock collar). */
+  function cliffFromWater(px, pz) {
+    const s = SWIM_L.surface;
+    return finite(s) && cartHeight(px, pz) - s > WADE_DROP;
   }
   /* Interior collision: the room rectangle inset by the radius and the furniture AABBs. */
   function roomOK(room, x, z) {
@@ -632,7 +656,8 @@ export function createPlayer(ctx) {
   const hovering = () => player.state === 'hover' && player.hover === HOVER;      // v11
   const boating = () => player.state === 'boat' && player.boat === BOAT;          // v11
   const fadingOut = () => player.fade === 'out';
-  const movable = () => { const L = swimL(); return !seated() && !atStation() && !player.exiting && !golfing() && !inCart() && !riding() && !hovering() && !boating() && !fadingOut() && !(L && (L.phase === 'diving' || L.phase === 'climbing')); };
+  const routing = () => player.state === 'route' && player.route === ROUTE;      // v13: the auto walk along a map route
+  const movable = () => { const L = swimL(); return !seated() && !atStation() && !player.exiting && !golfing() && !inCart() && !riding() && !hovering() && !boating() && !routing() && !fadingOut() && !(L && (L.phase === 'diving' || L.phase === 'climbing')); };
 
   function setMoveDir(dx, dz) {
     const d = Math.hypot(dx, dz);
@@ -649,6 +674,13 @@ export function createPlayer(ctx) {
     cam.snap = true;
   }
 
+  /* v12.1: the swimmer's height over the ground under it: the water surface less the bed, so the
+     body floats at the surface of whatever it is in (the pond bed is at 0, the lake's at -1.6). */
+  function swimFloat() {
+    const s = finite(SWIM_L.surface) ? SWIM_L.surface : waterLevel(player.pos.x, player.pos.y);
+    const g = cartHeight(player.pos.x, player.pos.y);
+    return Math.max(SWIM_DEPTH, s - g + SWIM_DEPTH);
+  }
   function beginSwimPhase(phase, time) {
     SWIM_L.phase = phase; SWIM_L.t0 = time;
     player.state = 'leisure'; player.leisure = SWIM_L;
@@ -771,7 +803,7 @@ export function createPlayer(ctx) {
       if (k === 'icecream') return 'Having ice cream at the café.';
       if (k === 'coffee') return 'Having coffee at the café.';
       if (k === 'bench') return 'Taking a break on a bench.';
-      if (k === 'swim') return 'Swimming in the pond.';
+      if (k === 'swim') return 'Swimming.';
     }
     if (a.state === 'commute') return 'Heading to work.';
     return 'Just taking a stroll.';
@@ -1071,12 +1103,25 @@ export function createPlayer(ctx) {
   }
   /* True when every tile under the segment is land (sampled every quarter tile). */
   function straightWalkOK(x0, z0, x1, z1) {
-    const n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.25);
-    for (let i = 0; i <= n; i++) {
-      const t = n ? i / n : 0;
-      if (!land(at(Math.floor(x0 + (x1 - x0) * t), Math.floor(z0 + (z1 - z0) * t)))) return false;
+    // v13: every tile the segment crosses (a grid walk), so a corner cut through a water or building
+    // tile never slips between samples (the quarter tile sampling let the island Go walk clip the lake)
+    let tx = Math.floor(x0), tz = Math.floor(z0);
+    if (!land(at(tx, tz))) return false;
+    const dx = x1 - x0, dz = z1 - z0;
+    const sx = dx > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1;
+    const tDx = dx !== 0 ? 1 / Math.abs(dx) : Infinity, tDz = dz !== 0 ? 1 / Math.abs(dz) : Infinity;
+    let tMaxX = dx !== 0 ? (sx > 0 ? tx + 1 - x0 : x0 - tx) * tDx : Infinity;
+    let tMaxZ = dz !== 0 ? (sz > 0 ? tz + 1 - z0 : z0 - tz) * tDz : Infinity;
+    for (let guard = 0; guard < 4096; guard++) {
+      if (Math.min(tMaxX, tMaxZ) >= 1) break;      // the next grid line is at or past the end
+      if (tMaxX === tMaxZ) {                        // exactly through a corner: both neighbours and the diagonal
+        if (!land(at(tx + sx, tz)) || !land(at(tx, tz + sz))) return false;
+        tx += sx; tz += sz; tMaxX += tDx; tMaxZ += tDz;
+      } else if (tMaxX < tMaxZ) { tx += sx; tMaxX += tDx; }
+      else { tz += sz; tMaxZ += tDz; }
+      if (!land(at(tx, tz))) return false;
     }
-    return true;
+    return land(at(Math.floor(x1), Math.floor(z1)));
   }
   /* Fills walkWay with the sim's BFS path (tile centers, the target tile left off) when the straight
      walk is not clear. A target tile the sim does not path to (a green, sand) is swapped for the
@@ -1109,6 +1154,80 @@ export function createPlayer(ctx) {
   function trimWalkWay(px, pz) {
     while (walkWay.length > 1 && straightWalkOK(px, pz, walkWay[1].x, walkWay[1].z)) walkWay.shift();
     if (walkWay.length === 1 && straightWalkOK(px, pz, walkTarget.x, walkTarget.z)) walkWay.shift();
+  }
+
+  /* ---------- v13: the map route (CONTRACT_V13 "Waypoints and directions") ----------
+     walkRoute(points): points are { x, z } world positions (tile centres from the sim's path finder,
+     the last one the waypoint itself). Only a visitor standing on foot (state 'idle', not fading,
+     not inside a room) takes it; riding states ignore it. The follower is the golf walk's
+     (walkWay, walkTarget, trimWalkWay) at SPEED_RUN; any movement, jump, interact, hover or quit
+     input ends it, as does reaching the last point. Returns true when the walk started. */
+  function walkRoute(points) {
+    if (!player.active || player.state !== 'idle' || player.fade || player.exiting || player.interior) return false;
+    if (!Array.isArray(points) || !points.length) return false;
+    walkWay.length = 0;
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      if (!p) continue;
+      const x = finite(p.x) ? p.x : NaN, z = finite(p.z) ? p.z : (finite(p.y) ? p.y : NaN);
+      if (!finite(x) || !finite(z)) continue;
+      walkWay.push({ x, z });
+    }
+    if (!walkWay.length) return false;
+    const last = walkWay.pop();
+    walkTarget.x = clamp(last.x, RADIUS, COLS - RADIUS); walkTarget.z = clamp(last.z, RADIUS, ROWS - RADIUS);
+    ROUTE.active = true; ROUTE.t0 = clock; ROUTE.left = walkWay.length + 1; ROUTE.x = walkTarget.x; ROUTE.z = walkTarget.z;
+    player.route = ROUTE; player.state = 'route';
+    player.pose = 'walk'; player.speed = SPEED_RUN; player.turn = null; player.onDeck = false; player.onBoard = false;
+    vel.x = 0; vel.z = 0; hopT0 = -1; moveT0 = clock;
+    return true;
+  }
+  function stopRoute() {
+    if (!routing()) return false;
+    walkWay.length = 0;
+    ROUTE.active = false; ROUTE.left = 0;
+    player.route = null; player.state = 'idle';
+    player.pose = 'stand'; player.speed = 0; vel.x = 0; vel.z = 0; moveT0 = -1;
+    return true;
+  }
+  function updateRoute(dt, time) {
+    trimWalkWay(player.pos.x, player.pos.y);
+    const way = walkWay.length ? walkWay[0] : walkTarget;
+    const dx = way.x - player.pos.x, dz = way.z - player.pos.y, dl = Math.hypot(dx, dz);
+    const stepLen = SPEED_RUN * dt;
+    const x0 = player.pos.x, z0 = player.pos.y;
+    if (walkWay.length && dl <= Math.max(ARRIVE, stepLen)) {
+      player.pos.x = way.x; player.pos.y = way.z; walkWay.shift();
+      setMoveDir(dx, dz);
+    } else if (dl <= Math.max(ARRIVE, stepLen)) {
+      player.pos.x = walkTarget.x; player.pos.y = walkTarget.z;
+      advanceWalk(x0, z0);
+      stopRoute();
+      return;
+    } else {
+      player.pos.x += dx / dl * stepLen; player.pos.y += dz / dl * stepLen;
+      setMoveDir(dx, dz);
+    }
+    player.pos.x = clamp(player.pos.x, RADIUS, COLS - RADIUS);
+    player.pos.y = clamp(player.pos.y, RADIUS, ROWS - RADIUS);
+    if (!finite(player.pos.x)) player.pos.x = x0; if (!finite(player.pos.y)) player.pos.y = z0;
+    ROUTE.left = walkWay.length + 1;
+    advanceWalk(x0, z0);
+    // the body turns toward the leg at the walk's rate; the chase camera settles behind after the align delay
+    const sp = Math.hypot(player.pos.x - x0, player.pos.y - z0) / Math.max(dt, 1e-6);
+    player.speed = finite(sp) ? sp : SPEED_RUN;
+    vel.x = (player.pos.x - x0) / Math.max(dt, 1e-6); vel.z = (player.pos.y - z0) / Math.max(dt, 1e-6);
+    if (dl > 1e-6) {
+      const tgt = Math.atan2(dx, dz), d = wrap(tgt - player.yaw), mx = FACE_RATE * dt;
+      player.yaw = wrap(player.yaw + clamp(d, -mx, mx));
+    }
+    player.targetYaw = player.yaw; player.bodyYaw = player.yaw; player.turn = null;
+    if (clock - ROUTE.t0 > ALIGN_DELAY && clock - lastMouseT > ALIGN_DELAY) {
+      const d = wrap(player.yaw - orbitYawT), mx = ALIGN_RATE * dt, st = clamp(d, -mx, mx);
+      orbitYawT = wrap(orbitYawT + st);
+      player.orbitYaw = wrap(player.orbitYaw + st);
+    }
+    player.pose = 'walk';
   }
   function beginWalkToBall(time) {
     const b = GOLF.ball;
@@ -3145,6 +3264,7 @@ export function createPlayer(ctx) {
     if (player.scooter === SCOOT) hopOff(time);       // v9: the scooter stays parked where the visitor left walk mode
     if (hovering()) hopOffBoard(time);                // v11: off the board; a ridden boat beaches where it floats
     if (boating()) leaveBoat(time, false);
+    if (routing()) stopRoute();                       // v13: the map route ends with walk mode
     BOARD.state = 'away'; BOARD.glow = 0;
     standUp();
     if (inRound()) endRound(false); else if (golfing()) leaveGolf(time);
@@ -3213,9 +3333,9 @@ export function createPlayer(ctx) {
           const k = clamp(player.jumpT, 0, 1), plunge = clamp((k - 0.85) / 0.15, 0, 1);
           y = H * (1 - k) + 1.4 * Math.sin(Math.PI * k) - 0.25 * plunge * plunge;
         } else if (L.phase === 'boarding' || L.phase === 'bouncing') y = H;
-        else if (L.phase === 'climbing') y = lerp(SWIM_DEPTH, H, easeOut(clamp((time - phaseT0) / CLIMB_LEN, 0, 1)));
+        else if (L.phase === 'climbing') y = lerp(swimFloat(), H, easeOut(clamp((time - phaseT0) / CLIMB_LEN, 0, 1)));
         else {
-          y = SWIM_DEPTH;
+          y = swimFloat();   // v12.1: at the surface of whatever water this is
           const sp = finite(player.splash) ? time - player.splash : -1;
           if (sp >= 0 && sp < 0.3) y -= 0.25 * (1 - easeOut(sp / 0.3));
         }
@@ -3665,6 +3785,8 @@ export function createPlayer(ctx) {
 
     // movement keys stand you up
     if (seated() && moving) standUp();
+    // v13: any input ends the auto walk along the map route (the edges then act as usual this frame)
+    if (routing() && (moving || inp.jump || inp.interact || inp.hover || inp.quit || inp.drive || inp.toggleView)) stopRoute();
 
     // interactions: the prompt is computed before the edges fire so E acts on what the HUD showed
     computePrompt(time);
@@ -3720,6 +3842,8 @@ export function createPlayer(ctx) {
       player.animT += dt;
     } else if (seated()) {
       player.pose = 'sit'; player.speed = 0; vel.x = 0; vel.z = 0;
+    } else if (routing()) {
+      updateRoute(dt, time);        // v13: the auto walk along the map route
     } else if (player.interior) {
       // inside a room: the room rectangle and the furniture are the collision world
       const room = player.interior;
@@ -3747,6 +3871,7 @@ export function createPlayer(ctx) {
     } else {
       // free movement: walk, run, pier, wade, swim
       const wet = inWater();
+      if (wet) SWIM_L.surface = waterLevel(player.pos.x, player.pos.y);   // v12.1: the body's level, pond or lake or river or creek
       const top = wet ? SPEED_SWIM : player.onDeck ? SPEED_PIER : (inp.run ? SPEED_RUN : SPEED_WALK);
       integrateVelocity(top, dt, moving);
 
@@ -4032,6 +4157,8 @@ export function createPlayer(ctx) {
       hoverStrikes: hoverCtlStrikes,
       look: player.look ? { board: player.look.board === undefined ? null : player.look.board, hat: player.look.hat === undefined ? null : player.look.hat } : null,
       followBall: !!player.followBall, lastCard: player.lastCard,
+      // v13
+      route: player.route ? { active: ROUTE.active, left: ROUTE.left, x: ROUTE.x, z: ROUTE.z, t0: ROUTE.t0 } : null,
       talkingTo: player.talkingTo, prompt: player.prompt ? { text: player.prompt.text, key: player.prompt.key, full: player.prompt.full } : null,
       heightOffset: player.heightOffset, deckY: player.deckY, moveDir: { x: player.moveDir.x, z: player.moveDir.z }, vel: { x: vel.x, z: vel.z },
       cam: { x: cam.x, y: cam.y, z: cam.z }, doorArmed, exitArmed,
@@ -4062,6 +4189,10 @@ export function createPlayer(ctx) {
   player.toggleBoard = () => toggleBoard(clock);
   player.surfaceAt = surfaceAt;
   player.waterLevelAt = waterLevel;
+  // v13: the map route auto walk (CONTRACT_V13 "Waypoints and directions"); riding states return false
+  player.walkRoute = walkRoute;
+  player.stopRoute = stopRoute;
+  player.route = null;
   return player;
 }
 

@@ -742,3 +742,51 @@ html.touch .card .actions .btn { padding: 11px 16px; }
   html.touch #interior-hint { top: 8px; }
   html.touch #runner-hud { padding: 8px 12px; }
 }
+
+/* ===== Version 13 (CONTRACT_V13 "The town map"): the map overlay. js/minimap.js fills #map-modal with .map-card (the
+   head with the title, the hint and the close button; the body with #map-canvas and the Go button #map-go beside the
+   pin) and adds the open class. The card is 80 percent of the view on laptops, the full view on phones (640 px wide or
+   520 px tall and under); the canvas takes every pointer gesture (drag, wheel, pinch), the backdrop closes. ===== */
+#map-modal { position: fixed; inset: 0; background: rgba(0,10,20,0.65); display: none; align-items: center; justify-content: center; z-index: 22; }
+#map-modal.open { display: flex; }
+#map-modal .map-card {
+  width: 80vw; height: 80vh; max-width: 80%; max-height: 80%; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--navy); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 30px 80px rgba(0,0,0,0.5);
+}
+.map-head { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--line); flex: none; }
+.map-title { font: 600 18px/1.2 var(--display); margin: 0; flex: none; }
+.map-hint { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-close {
+  flex: none; width: 32px; height: 32px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: var(--panel-2);
+  color: var(--text); font-size: 20px; line-height: 1; cursor: pointer;
+}
+.map-close:hover { filter: brightness(1.15); }
+.map-body { position: relative; flex: 1; min-height: 0; background: #0B2A45; touch-action: none; overscroll-behavior: contain; -webkit-user-select: none; user-select: none; }
+#map-canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; -webkit-tap-highlight-color: transparent; }
+#map-go { position: absolute; left: 0; top: 0; padding: 6px 14px; border-radius: 999px; font-weight: 600; box-shadow: 0 6px 16px rgba(0,0,0,0.4); white-space: nowrap; }
+#map-go[hidden] { display: none; }
+@media (max-width: 640px), (max-height: 520px) {
+  #map-modal .map-card { width: 100%; height: 100%; max-width: none; max-height: none; border-radius: 0; border: 0; }
+  .map-head { padding: 8px 8px 8px 12px; }
+  .map-title { font-size: 16px; }
+  .map-hint { display: none; }
+}
+html.touch .map-close { width: 40px; height: 40px; }
+html.touch #map-go { padding: 10px 18px; }
+/* The directions line (CONTRACT_V13 "Waypoints and directions"): #walk-waypoint, shipped by index.html or built by
+   js/render3d.js next to #walk-prompt, a pill like the prompt's just above it (render3d.js toggles display flex and
+   none inline and turns .wp-arrow). On touch it sits above the prompt pill with the prompt's offsets, clear of the
+   joystick third and the button grid on phones. */
+#walk-waypoint {
+  position: absolute; z-index: 6; left: 50%; bottom: 108px; transform: translateX(-50%);
+  background: rgba(0,45,79,0.92); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px 6px 10px;
+  font-size: 13px; color: var(--text); white-space: nowrap; box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  display: none; align-items: center; gap: 8px; max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis;
+}
+body.walk #walk-waypoint:not([hidden]) { display: flex; }
+#walk-waypoint .wp-arrow { flex: 0 0 auto; transition: transform .12s linear; }
+#walk-waypoint .wp-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+html.touch #walk-waypoint { left: 12px; right: auto; transform: none; bottom: 56px; max-width: calc(100% - 160px); }
+@media (max-width: 640px), (max-height: 520px) {
+  html.touch #walk-waypoint { bottom: 52px; left: 140px; max-width: calc(100% - 290px); }
+}

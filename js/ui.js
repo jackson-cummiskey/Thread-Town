@@ -320,6 +320,7 @@
     if (btn) btn.textContent = on ? 'Exit walk mode' : 'Walk the town';
     if (!on) {
       const p = $('#walk-prompt'); if (p) p.hidden = true;
+      const w = $('#walk-waypoint'); if (w) w.hidden = true;   // v13: the directions line goes with walk mode
       hideWalkV5();
     }
   }
@@ -546,7 +547,14 @@
     document.addEventListener('click', ev => { if (menuOpen() && !ev.target.closest('header')) setMenu(false); });
   }
   function anyModalOpen() {
-    return ['#modal', '#walk-modal', '#leaderboard-modal', '#shop-modal'].some(id => { const el = $(id); return el && el.classList.contains('open'); });
+    return mapOpen() || ['#modal', '#walk-modal', '#leaderboard-modal', '#shop-modal'].some(id => { const el = $(id); return el && el.classList.contains('open'); });
+  }
+  /* v13 (CONTRACT_V13 "The town map"): the open town map counts as a modal for Tab and Esc; the renderer owns it. */
+  function mapOpen() {
+    try { return !!(TT.town && typeof TT.town.mapOpen === 'function' && TT.town.mapOpen()); } catch (e) { return false; }
+  }
+  function closeMap() {
+    try { if (TT.town && typeof TT.town.closeMap === 'function') TT.town.closeMap(); } catch (e) { /* the map is already gone */ }
   }
 
   /* ----- leaderboard (CONTRACT_V6 "Leaderboard" UI) -----
@@ -835,6 +843,7 @@
       if (menuOpen()) { setMenu(false); return; }   // v12: the phone menu closes first
       closeAdd();
       if (shopOpen()) { closeShop(); return; }
+      if (mapOpen()) { closeMap(); return; }   // v13: the renderer's capture listener normally closes it first
       if ($('#leaderboard-modal').classList.contains('open')) { closeLeaderboard(); return; }
       if ($('#walk-modal').classList.contains('open')) { closeWalkModal(); return; }
       if (walkOn()) return; // the renderer exits walk mode (and quits the subway) and resets the view itself
@@ -848,7 +857,7 @@
     $('#toggle-cinematic').addEventListener('change', ev => { TT.town.setCinematic(ev.target.checked); });
     const camSel = $('#camera-mode');
     if (camSel && TT.town.setCameraMode) {
-      camSel.value = TT.town.cameraMode ? TT.town.cameraMode() : 'free';
+      camSel.value = TT.town.cameraMode ? TT.town.cameraMode() : 'orbit';
       camSel.addEventListener('change', ev => { TT.town.setCameraMode(ev.target.value); });
     }
     /* v12: the phone menu, and no Tab hint on the walk button where there is no keyboard */

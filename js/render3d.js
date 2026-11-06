@@ -278,7 +278,7 @@ let followId = null;
 let player = null;             // createPlayer(ctx) result, also TT.player
 let playerRec = null;          // { handle, shadow, animate, setOpacity, dispose, propKind, specKey, station, ... }
 let walkOn = false;
-let prevCamMode = 'free';      // camera mode to restore when walk mode ends
+let prevCamMode = 'orbit';     // camera mode to restore when walk mode ends (v12.1: orbit only; the free camera code stays but is never selected)
 let pointerLocked = false;
 let savedFov = 28, savedNear = 1;
 const WALK_FOV = 68, WALK_NEAR = 0.08;
@@ -358,6 +358,34 @@ const KIOSK_REACH = 1.5;
 const _kf = { x: 0, y: 0 };    // kioskFrontPos scratch
 const mmView = { x: 0, z: 0, yaw: Math.PI, target: null, mode: 'walk', time: 0 };   // the minimap view, reused
 const mmTarget = { x: 0, z: 0 };
+/* ---------- version 13 (CONTRACT_V13 "Waypoints and directions") ----------
+   The waypoint the open map sets (through minimap.onWaypoint), the route the sim's path finder
+   gives (tile centres plus the waypoint itself, reused records) and the HUD line under the prompt
+   pill (#walk-waypoint, built here when index.html has none). Every call into the minimap's v13
+   API (openMap, closeMap, isOpen, setWaypoint, setRoute, onWaypoint) is guarded so a map without
+   it never throws. */
+const WP = { x: 0, z: 0, set: false };                 // the waypoint (world x, z), set while a pin is down
+const ROUTE_PTS = [];                                  // the route: { x, z } records reused between recomputes (the pool is never truncated)
+const ROUTE_OUT = [];                                  // the live view of ROUTE_PTS (the first routeN records) handed to the minimap
+let routeN = 0;                                        // how many of ROUTE_PTS are live
+let routeTileX = -1, routeTileZ = -1, routeAt = -Infinity, routeOk = false, routeBoat = false;
+let routeToPin = false;                                // the route's last point is the pin itself (its last leg crosses land alone)
+let routeEndX = -1, routeEndZ = -1;                    // the tile a route that stops short of the pin ends on (kept across recomputes)
+const ROUTE_MIN_GAP = 0.5;                             // at most twice a second
+const ROUTE_MOVE = 2;                                  // recomputed once the visitor is this far (tiles) from the computed tile
+const ROUTE_NEAR = 6;                                  // the nearest tile the sim walks within this of the waypoint
+const WP_REACH = 1.5;                                  // within this many tiles the waypoint clears with 'You are here'
+const WP_AHEAD = 3;                                    // the bearing reads the route point this many tiles ahead
+const M_PER_TILE = 9;                                  // 10 yards per tile
+const WP_HERE_LEN = 2.0;                               // 'You are here' stays this long (seconds)
+const M_HOLD = 0.4;                                    // M held this long opens the map
+const WP_HUD_ID = 'walk-waypoint';
+let wpEl = null, wpTextEl = null, wpArrowEl = null;    // the HUD line, its text span and its arrow
+const wpState = { text: '', deg: 9999, hidden: true, hereUntil: -1 };
+let mapOpenFlag = false;                               // our own view of the map (the minimap's isOpen wins when it exists)
+let mHoldAt = -1, mHoldOpened = false;                 // the M key held (wall clock ms), and whether the hold opened the map
+let boatParent = null, boatQueue = null;               // the boat route BFS scratch (allocated on first use)
+const _rt = { x: 0, z: 0 };                            // nearest tile scratch
 const HOVER_N = VEHICLES.HOVER || {};
 const HOVER_FEET_Y = HOVER_N.FEET && isFinite(HOVER_N.FEET.y) ? HOVER_N.FEET.y : 0.07;   // the rider's feet on the deck top
 const BOAT_N = VEHICLES.BOAT || {};
@@ -3250,9 +3278,13 @@ function feedPlayerInput() {
   if (walkInput.interact && kioskCanOpen() && nearKiosk(player.pos.x, player.pos.y)) { walkInput.interact = false; openShopFrom('kiosk'); }
   walkInput.hover = WALK.hover || !!(ext && ext.hover) || !!(tin && tin.hover);                      // v11: H, the hoverboard edge
   walkInput.boost = WALK.run || !!(ext && (ext.boost || ext.run)) || !!(tin && tin.boost);          // v11: Shift held boosts while riding; v12: the Boost button
-  if (((ext && ext.map) || (tin && tin.map)) && minimap) minimap.toggle();                           // v11: the headless M; v12: the Map button
-  // v11: while the shop modal is up the keys belong to it (ui.js treats it as an open modal)
-  if (subwayPhase || shopOpen()) { walkInput.fwd = 0; walkInput.side = 0; walkInput.run = false; walkInput.jump = false; walkInput.jumpHeld = false; walkInput.interact = false; walkInput.hover = false; walkInput.boost = false; }
+  if (ext && ext.map && minimap) minimap.toggle();                                                   // v11: the headless M toggles the corner map
+  if (tin && tin.map) { if (mapOpenNow()) closeMap(); else if (!openMap() && minimap) minimap.toggle(); }   // v13: the touch Map button opens the town map
+  if (ext && ext.openMap) openMap();                                                                  // v13: headless open and close
+  if (ext && ext.closeMap) closeMap();
+  if (ext && ext.go) goRoute();                                                                      // v13: headless Go
+  // v11: while the shop modal is up the keys belong to it (ui.js treats it as an open modal); v13: the open map too
+  if (subwayPhase || shopOpen() || mapOpenNow()) { walkInput.fwd = 0; walkInput.side = 0; walkInput.run = false; walkInput.jump = false; walkInput.jumpHeld = false; walkInput.interact = false; walkInput.hover = false; walkInput.boost = false; }
   walkInput.toggleView = WALK.view || !!(ext && ext.toggleView) || !!(tin && tin.toggleView);
   walkInput.lookDX = WALK.lookDX + (ext && isFinite(ext.lookDX) ? ext.lookDX : 0) + (tin && isFinite(tin.lookDX) ? tin.lookDX : 0);
   walkInput.lookDY = WALK.lookDY + (ext && isFinite(ext.lookDY) ? ext.lookDY : 0) + (tin && isFinite(tin.lookDY) ? tin.lookDY : 0);
@@ -3270,7 +3302,7 @@ function feedPlayerInput() {
   walkInput.drive = WALK.drive || !!(ext && (ext.drive || ext.tab)) || !!(tin && tin.drive);   // v8: Tab, the cart auto-drive; v12: the Tab button
   player.setInput(walkInput);
   WALK.jump = WALK.interact = WALK.view = WALK.club1 = WALK.club2 = WALK.club3 = WALK.quit = WALK.drive = WALK.hover = false; WALK.lookDX = WALK.lookDY = WALK.zoom = 0;
-  if (ext) { ext.jump = ext.interact = ext.toggleView = ext.club1 = ext.club2 = ext.club3 = ext.quit = ext.drive = ext.tab = ext.hover = ext.map = false; ext.lookDX = ext.lookDY = ext.zoom = 0; }
+  if (ext) { ext.jump = ext.interact = ext.toggleView = ext.club1 = ext.club2 = ext.club3 = ext.quit = ext.drive = ext.tab = ext.hover = ext.map = ext.openMap = ext.closeMap = ext.go = false; ext.lookDX = ext.lookDY = ext.zoom = 0; }
 }
 
 /* ---------- v12: the touch layer (CONTRACT_V12 "The touch layer", "Wiring") ----------
@@ -3337,7 +3369,7 @@ function applyTouchLayout() {
 function touchModeNow() {
   if (!touchLive || !walkOn || !player) return 'none';
   if (gameMode === 'subway') return 'runner';
-  if (subwayPhase || shopOpen()) return 'none';
+  if (subwayPhase || shopOpen() || mapOpenNow()) return 'none';   // v13: the open town map takes the view like the shop
   const s = player.state;
   return s === 'hover' ? 'hover' : s === 'scooter' ? 'ride' : s === 'boat' ? 'boat' : s === 'golf' ? 'golf' : s === 'cart' ? 'cart' : 'walk';
 }
@@ -4222,9 +4254,14 @@ function buildMinimap() {
   if (typeof createMinimap !== 'function' || typeof document === 'undefined') return;
   minimapMount = (document.getElementById && document.getElementById('minimap')) || null;
   try {
-    minimap = createMinimap({ sim: TT.sim, state: TT.state, depts: TT.DEPARTMENTS, mount: minimapMount || undefined, storage: rawStorage, keys: false });
+    minimap = createMinimap({ sim: TT.sim, state: TT.state, depts: TT.DEPARTMENTS, mount: minimapMount || undefined, storage: rawStorage, keys: false,
+      onGo: () => goRoute(),                                   // v13: the Go button on the open map
+      onOpen: open => { mapOpenFlag = !!open; if (open) { clearWalkKeys(); if (pointerLocked) releaseLock(); } if (touch) syncTouchMode(); },   // v13: the map opened or closed itself (a corner tap, its close button, the backdrop)
+      onWaypoint: (x, z) => onWaypointSet(x, z) });            // v13: a ctx hook too, for a map that takes it there
   } catch (e) { console.warn('Thread Town: the minimap failed to build', e); minimap = null; return; }
   if (!minimap) return;
+  // v13: the map tells us the waypoint it sets or clears (null clears); a map without the hook keeps the pin to itself
+  if (typeof minimap.onWaypoint === 'function') { try { minimap.onWaypoint((x, z) => onWaypointSet(x, z)); } catch (e) { /* ignore */ } }
   // the module brings its own corner frame; inside the slot the slot is the frame, so the module's fills it
   const st = minimap.el && minimap.el.style;
   if (minimapMount && st) {
@@ -4276,10 +4313,340 @@ function updateMinimap(time) {
   if (mode !== 'hidden') {
     mmView.x = p.pos.x; mmView.z = p.pos.y;
     mmView.yaw = isFinite(p.orbitYaw) ? p.orbitYaw : Math.PI;
-    mmView.target = minimapTarget(p);
+    // v13: the waypoint wins over the prompt target while it is set
+    if (WP.set) { mmTarget.x = WP.x; mmTarget.z = WP.z; mmView.target = mmTarget; } else mmView.target = minimapTarget(p);
     mmView.time = time;
-  } else mmView.target = null;
+    updateRoute(p, time);        // v13: the route and the HUD directions
+  } else { mmView.target = null; updateWaypointHud(null, time); }
   try { minimap.update(mmView); } catch (e) { /* a drawing failure never stops the frame */ }
+}
+
+/* ---------- v13: the town map, waypoints and directions (CONTRACT_V13) ----------
+   The open and close paths (Shift+M, M held 0.4 s, the touch Map button, Esc, the close button
+   and the backdrop through the minimap's own handlers, M again), the waypoint the map reports,
+   the route from TT.sim.findPath (boats: a BFS of our own over TT.sim.boatWaterAt), the HUD line
+   and Go. */
+function nowMs() { return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now(); }
+function mapOpenNow() {
+  if (minimap && typeof minimap.isOpen === 'function') { try { return !!minimap.isOpen(); } catch (e) { return mapOpenFlag; } }
+  return mapOpenFlag;
+}
+/* Opens the town map; false when the minimap has no openMap (nothing changes then). */
+function openMap() {
+  if (!minimap || !walkOn || gameMode || subwayPhase) return false;
+  if (typeof minimap.openMap !== 'function') return false;
+  try { minimap.openMap(); } catch (e) { return false; }
+  mapOpenFlag = true;
+  if (pointerLocked) releaseLock();
+  clearWalkKeys();
+  if (touch) syncTouchMode();
+  return true;
+}
+function closeMap() {
+  const was = mapOpenNow();
+  if (minimap && typeof minimap.closeMap === 'function') { try { minimap.closeMap(); } catch (e) { /* ignore */ } }
+  mapOpenFlag = false;
+  if (was) { clearWalkKeys(); if (touch) syncTouchMode(); }
+  return was;
+}
+function toggleMap() { return mapOpenNow() ? (closeMap(), false) : openMap(); }
+/* The M key: held M_HOLD seconds opens the map (checked each frame on the wall clock). */
+function stepMHold() {
+  if (mHoldAt < 0 || mHoldOpened) return;
+  if (nowMs() - mHoldAt >= M_HOLD * 1000) { mHoldOpened = true; if (!mapOpenNow()) openMap(); }
+}
+/* The waypoint the map reports: (x, z), ({ x, z }) or null to clear. Sets the pin on the corner map too. */
+function onWaypointSet(x, z) {
+  if (x && typeof x === 'object') { z = isFinite(x.z) ? x.z : x.y; x = x.x; }
+  if (x === null || x === undefined || !isFinite(x) || !isFinite(z)) { clearWaypoint(false); return; }
+  WP.x = +x; WP.z = +z; WP.set = true;
+  routeOk = false; routeAt = -Infinity; routeN = 0; routeToPin = false; routeEndX = -1; routeEndZ = -1;
+  wpState.hereUntil = -1;
+}
+/* Sets the waypoint from our side (the headless path) and tells the map. */
+function setWaypoint(x, z) {
+  if (x === null || x === undefined) { clearWaypoint(true); return false; }
+  onWaypointSet(x, z);
+  if (minimap && typeof minimap.setWaypoint === 'function') { try { minimap.setWaypoint(WP.x, WP.z); } catch (e) { /* ignore */ } }
+  return WP.set;
+}
+function clearWaypoint(tellMap) {
+  WP.set = false; routeOk = false; routeN = 0; routeAt = -Infinity; routeToPin = false; routeEndX = -1; routeEndZ = -1;
+  ROUTE_OUT.length = 0;
+  if (minimap) {
+    if (tellMap !== false && typeof minimap.setWaypoint === 'function') { try { minimap.setWaypoint(null); } catch (e) { /* ignore */ } }
+    if (typeof minimap.setRoute === 'function') { try { minimap.setRoute(null); } catch (e) { /* ignore */ } }
+  }
+}
+function pushRoutePt(x, z) {
+  let r = ROUTE_PTS[routeN];
+  if (!r) { r = { x: 0, z: 0 }; ROUTE_PTS[routeN] = r; }
+  r.x = x; r.z = z; routeN++;
+}
+/* The nearest tile within ROUTE_NEAR of (tx, tz) that ok(x, y) accepts (rings outward, the tile itself first); null when none. */
+function nearestOkTile(tx, tz, ok) {
+  if (ok(tx, tz)) { _rt.x = tx; _rt.z = tz; return _rt; }
+  for (let r = 1; r <= ROUTE_NEAR; r++) {
+    let bx = -1, bz = -1, bd = Infinity;
+    for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+      const cx = tx + dx, cz = tz + dz;
+      if (!ok(cx, cz)) continue;
+      const d = dx * dx + dz * dz;
+      if (d < bd) { bd = d; bx = cx; bz = cz; }
+    }
+    if (bx >= 0) { _rt.x = bx; _rt.z = bz; return _rt; }
+  }
+  return null;
+}
+const simWalkableAt = (x, y) => { const S = TT.sim; return !!(S && typeof S.walkable === 'function' && x >= 0 && y >= 0 && x < S.COLS && y < S.ROWS && S.walkable(x, y)); };
+const boatWaterTile = (x, y) => { const S = TT.sim; return !!(S && typeof S.boatWaterAt === 'function' && x >= 0 && y >= 0 && x < S.COLS && y < S.ROWS && S.boatWaterAt(x + 0.5, y + 0.5)); };
+/* A plain BFS over the boat water from (sx, sz) to (tx, tz); writes the tiles into ROUTE_PTS (centres). */
+function boatRoute(sx, sz, tx, tz) {
+  const S = TT.sim, COLS = S.COLS | 0, ROWS = S.ROWS | 0, N = COLS * ROWS;
+  if (!boatParent || boatParent.length !== N) { boatParent = new Int32Array(N); boatQueue = new Int32Array(N); }
+  const parent = boatParent, queue = boatQueue;
+  parent.fill(-2);
+  const si = sz * COLS + sx, ti = tz * COLS + tx;
+  if (si === ti) return true;
+  let qh = 0, qt = 0;
+  parent[si] = -1; queue[qt++] = si;
+  let found = false;
+  while (qh < qt) {
+    const cur = queue[qh++];
+    if (cur === ti) { found = true; break; }
+    const cx = cur % COLS, cy = (cur - cx) / COLS;
+    for (let d = 0; d < 4; d++) {
+      const nx = cx + (d === 0 ? 1 : d === 1 ? -1 : 0), ny = cy + (d === 2 ? 1 : d === 3 ? -1 : 0);
+      if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+      const n = ny * COLS + nx;
+      if (parent[n] !== -2 || !boatWaterTile(nx, ny)) continue;
+      parent[n] = cur; queue[qt++] = n;
+    }
+  }
+  if (!found) return false;
+  // the chain runs backwards from the target; reverse it in place once written
+  const start = routeN;
+  for (let i = ti; i !== si && i >= 0; i = parent[i]) pushRoutePt((i % COLS) + 0.5, Math.floor(i / COLS) + 0.5);
+  for (let a = start, b = routeN - 1; a < b; a++, b--) { const pa = ROUTE_PTS[a], pb = ROUTE_PTS[b]; const x = pa.x, z = pa.z; pa.x = pb.x; pa.z = pb.z; pb.x = x; pb.z = z; }
+  return true;
+}
+/* Land tiles, the golf walk's rule (player.js land): the straight last leg to the pin may cross these alone. */
+const landTileAt = (x, y) => {
+  const S = TT.sim, T = S && S.TILES;
+  if (!T || typeof S.at !== 'function' || x < 0 || y < 0 || x >= S.COLS || y >= S.ROWS) return false;
+  const v = S.at(x, y);
+  return v === T.G || v === T.P || v === T.Z || v === T.F || v === T.FW || v === T.GR || v === T.SA || v === T.TEE
+    || v === T.SW || v === T.CW || v === T.PK || v === T.BR || v === T.PT || v === T.CP || v === T.DK;
+};
+/* True when every tile the segment crosses is land (a grid walk, the same rule as player.js
+   straightWalkOK, so a corner cut through a water or building tile never slips between samples). */
+function straightLegOK(x0, z0, x1, z1) {
+  let tx = Math.floor(x0), tz = Math.floor(z0);
+  if (!landTileAt(tx, tz)) return false;
+  const dx = x1 - x0, dz = z1 - z0;
+  const sx = dx > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1;
+  const tDx = dx !== 0 ? 1 / Math.abs(dx) : Infinity, tDz = dz !== 0 ? 1 / Math.abs(dz) : Infinity;
+  let tMaxX = dx !== 0 ? (sx > 0 ? tx + 1 - x0 : x0 - tx) * tDx : Infinity;
+  let tMaxZ = dz !== 0 ? (sz > 0 ? tz + 1 - z0 : z0 - tz) * tDz : Infinity;
+  for (let guard = 0; guard < 4096; guard++) {
+    if (Math.min(tMaxX, tMaxZ) >= 1) break;      // the next grid line is at or past the end
+    if (tMaxX === tMaxZ) {                        // exactly through a corner: both neighbours and the diagonal
+      if (!landTileAt(tx + sx, tz) || !landTileAt(tx, tz + sz)) return false;
+      tx += sx; tz += sz; tMaxX += tDx; tMaxZ += tDz;
+    } else if (tMaxX < tMaxZ) { tx += sx; tMaxX += tDx; }
+    else { tz += sz; tMaxZ += tDz; }
+    if (!landTileAt(tx, tz)) return false;
+  }
+  return landTileAt(Math.floor(x1), Math.floor(z1));
+}
+/* Recomputes the route from the visitor's tile to the waypoint tile (or the nearest tile the sim
+   walks within ROUTE_NEAR: a building, the water, a green) and hands it to the minimap. The pin
+   itself is the last point only when its tile is one the sim walks, or when the straight leg from
+   the route's last tile to the pin crosses land alone (planWalkWay's rule: the island hole takes
+   the footbridge onto the green); otherwise the route ends at the nearest walkable tile and that
+   tile counts as the waypoint (a pin deep inside a building, out on the water). */
+function computeRoute(p, time) {
+  const S = TT.sim;
+  routeN = 0; routeOk = false; routeToPin = false;
+  routeTileX = Math.floor(p.pos.x); routeTileZ = Math.floor(p.pos.y); routeAt = time;
+  const boat = p.state === 'boat';
+  if (boat !== routeBoat) { routeEndX = -1; routeEndZ = -1; }   // the candidate tiles change with the ride
+  routeBoat = boat;
+  if (!S) return false;
+  const tx = Math.floor(WP.x), tz = Math.floor(WP.z);
+  if (routeBoat) {
+    const s = nearestOkTile(routeTileX, routeTileZ, boatWaterTile);
+    const sx = s ? s.x : -1, sz = s ? s.z : -1;
+    const t = nearestOkTile(tx, tz, boatWaterTile);
+    if (s && t) { const ttx = t.x, ttz = t.z; routeOk = boatRoute(sx, sz, ttx, ttz); routeToPin = ttx === tx && ttz === tz; }
+  } else if (typeof S.findPath === 'function') {
+    const s = nearestOkTile(routeTileX, routeTileZ, simWalkableAt);
+    const sx = s ? s.x : -1, sz = s ? s.z : -1;
+    let path = null, toPin = false;
+    if (s) {
+      // the waypoint tile first
+      if (simWalkableAt(tx, tz)) { path = S.findPath(sx, sz, tx, tz); toPin = !!path; }
+      // then the end tile an earlier recompute settled on (so the end never hops between recomputes)
+      if (!path && routeEndX >= 0 && simWalkableAt(routeEndX, routeEndZ)) path = S.findPath(sx, sz, routeEndX, routeEndZ);
+      // then rings of nearer tiles the sim walks: pass 0 only those with a clear straight leg onto the
+      // pin, pass 1 any of them (the route then stops there); the shortest path wins within a ring
+      for (let pass = 0; !path && pass < 2; pass++) {
+        for (let r = 1; !path && r <= ROUTE_NEAR; r++) {
+          let best = null;
+          for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
+            if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+            const cx = tx + dx, cz = tz + dz;
+            if (!simWalkableAt(cx, cz)) continue;
+            if (pass === 0 && !straightLegOK(cx + 0.5, cz + 0.5, WP.x, WP.z)) continue;
+            const q = S.findPath(sx, sz, cx, cz);
+            if (q && (!best || q.length < best.length)) best = q;
+          }
+          path = best;
+        }
+        if (path) toPin = pass === 0;
+      }
+    }
+    if (path) {
+      for (let i = 0; i < path.length; i++) pushRoutePt(path[i].x + 0.5, path[i].y + 0.5);
+      routeOk = true; routeToPin = toPin;
+    }
+  }
+  if (routeOk) {
+    if (routeToPin) { pushRoutePt(WP.x, WP.z); routeEndX = -1; routeEndZ = -1; }   // the last leg to the pin itself
+    else if (routeN > 0) { routeEndX = Math.floor(ROUTE_PTS[routeN - 1].x); routeEndZ = Math.floor(ROUTE_PTS[routeN - 1].z); }
+  }
+  if (minimap && typeof minimap.setRoute === 'function') {
+    try {
+      if (routeOk) {
+        ROUTE_OUT.length = routeN;
+        for (let i = 0; i < routeN; i++) ROUTE_OUT[i] = ROUTE_PTS[i];
+        minimap.setRoute(ROUTE_OUT);
+      } else { ROUTE_OUT.length = 0; minimap.setRoute(null); }
+    } catch (e) { /* ignore */ }
+  }
+  return routeOk;
+}
+/* Per frame while the map shows: reach test, the recompute rule, the HUD line. */
+function updateRoute(p, time) {
+  if (!WP.set) { updateWaypointHud(p, time); return; }
+  const dx = WP.x - p.pos.x, dz = WP.z - p.pos.y, dist = Math.hypot(dx, dz);
+  let reached = dist <= WP_REACH;
+  // a route that stops short of the pin: reaching its end counts as reaching the waypoint
+  if (!reached && routeOk && !routeToPin && routeN > 0) {
+    const e = ROUTE_PTS[routeN - 1];
+    reached = Math.hypot(e.x - p.pos.x, e.z - p.pos.y) <= WP_REACH;
+  }
+  if (reached) {
+    clearWaypoint(true);
+    wpState.hereUntil = time + WP_HERE_LEN;
+    updateWaypointHud(p, time);
+    return;
+  }
+  const boat = p.state === 'boat';
+  const moved = Math.hypot(p.pos.x - (routeTileX + 0.5), p.pos.y - (routeTileZ + 0.5));
+  const stale = !routeOk || moved > ROUTE_MOVE || boat !== routeBoat;   // a failed search is retried at the same rate
+  if (stale && time - routeAt >= ROUTE_MIN_GAP) computeRoute(p, time);
+  updateWaypointHud(p, time);
+}
+/* The bearing word from the angle (radians, positive to the left) between the heading and the next point. */
+function bearingWord(a) {
+  const d = Math.abs(a) * 180 / Math.PI;
+  if (d < 20) return 'ahead';
+  if (d < 60) return a > 0 ? 'bear left' : 'bear right';
+  if (d < 125) return a > 0 ? 'left' : 'right';
+  return 'behind';
+}
+/* The HUD line under the prompt pill. index.html may ship #walk-waypoint; otherwise it is built
+   next to #walk-prompt (inline styles only when the stylesheet gives it none). */
+function ensureWpEl() {
+  if (wpEl) return wpEl;
+  if (typeof document === 'undefined' || !document.createElement) return null;
+  let el = document.getElementById ? document.getElementById(WP_HUD_ID) : null;
+  if (!el) {
+    el = document.createElement('div');
+    el.id = WP_HUD_ID; el.className = 'walk-ui';
+    el.hidden = true;
+    const host = hudEl('prompt') && hudEl('prompt').parentNode ? hudEl('prompt').parentNode : (container || document.body);
+    if (host && host.appendChild) { try { host.appendChild(el); } catch (e) { /* ignore */ } }
+  }
+  if (el.setAttribute) { el.setAttribute('aria-live', 'polite'); el.setAttribute('aria-label', 'Directions'); }
+  el.innerHTML = '<svg class="wp-arrow" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1 L12 8 L8.3 7.2 L8.3 13 L5.7 13 L5.7 7.2 L2 8 Z" fill="' + AQUA + '"/></svg><span class="wp-text"></span>';
+  wpArrowEl = el.querySelector ? el.querySelector('.wp-arrow') : null;
+  wpTextEl = el.querySelector ? el.querySelector('.wp-text') : null;
+  if (wpTextEl === null && el.firstChild) wpTextEl = el.lastChild;
+  // no stylesheet rule yet: a pill like the prompt's, just above it
+  let styled = false;
+  try { styled = typeof getComputedStyle === 'function' && getComputedStyle(el).position === 'absolute'; } catch (e) { styled = false; }
+  if (!styled && el.style) {
+    const s = el.style;
+    s.position = 'absolute'; s.zIndex = '6'; s.left = '50%'; s.bottom = '108px'; s.transform = 'translateX(-50%)';
+    s.background = 'rgba(0,45,79,0.92)'; s.border = '1px solid rgba(226,233,238,0.25)'; s.borderRadius = '999px';
+    s.padding = '6px 14px 6px 10px'; s.fontSize = '13px'; s.color = SILVER; s.whiteSpace = 'nowrap';
+    s.alignItems = 'center'; s.gap = '8px'; s.pointerEvents = 'none'; s.boxShadow = '0 8px 24px rgba(0,0,0,0.35)';
+    s.maxWidth = 'calc(100% - 32px)';
+    if (wpArrowEl && wpArrowEl.style) { wpArrowEl.style.transition = 'transform .12s linear'; wpArrowEl.style.flex = '0 0 auto'; }
+  }
+  wpEl = el;
+  return el;
+}
+/* Writes the line: 'Waypoint: 120 m, bear left' with the arrow turned by the bearing, 'You are
+   here' for WP_HERE_LEN after reaching it, hidden otherwise. A steady frame touches no DOM. */
+function updateWaypointHud(p, time) {
+  let text = '', deg = 0, show = false;
+  if (p && WP.set && walkOn) {
+    const dx = WP.x - p.pos.x, dz = WP.z - p.pos.y;
+    let dist = Math.hypot(dx, dz);
+    // the distance along the route when there is one (tile centres), else as the crow flies
+    if (routeOk && routeN > 1) {
+      let along = 0, px = p.pos.x, pz = p.pos.y;
+      for (let i = 0; i < routeN; i++) { const r = ROUTE_PTS[i]; along += Math.hypot(r.x - px, r.z - pz); px = r.x; pz = r.z; }
+      if (along > dist) dist = along;
+    }
+    // the point WP_AHEAD tiles ahead along the route (the waypoint itself without one)
+    let ax = WP.x, az = WP.z;
+    if (routeOk && routeN > 0) {
+      let i = 0;
+      // skip route points already behind the visitor (within a tile and a bit)
+      while (i < routeN - 1 && Math.hypot(ROUTE_PTS[i].x - p.pos.x, ROUTE_PTS[i].z - p.pos.y) < 1.2) i++;
+      const j = Math.min(routeN - 1, i + WP_AHEAD - 1);
+      ax = ROUTE_PTS[j].x; az = ROUTE_PTS[j].z;
+    }
+    const heading = isFinite(p.yaw) ? p.yaw : Math.PI;
+    let a = Math.atan2(ax - p.pos.x, az - p.pos.y) - heading;
+    a = Math.atan2(Math.sin(a), Math.cos(a));    // wrapped to (-pi, pi]
+    const m = Math.max(1, Math.round(dist * M_PER_TILE));
+    text = 'Waypoint: ' + m + ' m, ' + bearingWord(a);
+    deg = Math.round(-a * 180 / Math.PI / 5) * 5;   // left turns counterclockwise on screen
+    show = true;
+  } else if (wpState.hereUntil >= 0 && walkOn) {
+    if (time < wpState.hereUntil) { text = 'You are here'; deg = 0; show = true; }
+    else wpState.hereUntil = -1;
+  }
+  const el = show || !wpState.hidden ? ensureWpEl() : null;
+  if (!el) return;
+  if (wpState.hidden !== !show) {
+    wpState.hidden = !show; el.hidden = !show;
+    if (el.style) el.style.display = show ? 'flex' : 'none';
+  }
+  if (!show) return;
+  if (wpState.text !== text) { wpState.text = text; if (wpTextEl) wpTextEl.textContent = text; else el.textContent = text; }
+  if (wpState.deg !== deg) { wpState.deg = deg; if (wpArrowEl && wpArrowEl.style) wpArrowEl.style.transform = 'rotate(' + deg + 'deg)'; }
+}
+/* Go: the auto walk along the route (TT.player.walkRoute) when the visitor is on foot; riding
+   states ignore it. The map closes so the visitor can watch the walk. */
+function goRoute() {
+  if (!walkOn || !player || !WP.set) return false;
+  if (player.state !== 'idle' || typeof player.walkRoute !== 'function') return false;
+  const time = TT.state ? TT.state.time : 0;
+  if (!routeOk) computeRoute(player, time);
+  if (!routeOk) return false;
+  const pts = new Array(routeN);
+  for (let i = 0; i < routeN; i++) pts[i] = { x: ROUTE_PTS[i].x, z: ROUTE_PTS[i].z };
+  let ok = false;
+  try { ok = !!player.walkRoute(pts); } catch (e) { ok = false; }
+  if (ok) closeMap();
+  return ok;
 }
 
 /* The inside look (CONTRACT_V5 "Visitor fades and interiors"): sky and fog take the room's ceiling
@@ -4523,6 +4890,10 @@ function setHudVisible(on) {
   if (pe && !on) { pe.hidden = true; promptKey = ''; promptFade.shown = false; promptFade.armed = false; promptFade.hideAt = -1; if (pe.style) pe.style.opacity = ''; }
   if (!on) resetV5Hud();
   if (!on) { if (hoverRec) hoverRec.m.group.visible = false; if (minimapMount) minimapMount.hidden = true; }   // v11
+  if (!on) {   // v13: the map closes, the waypoint and the HUD line go with walk mode
+    closeMap(); clearWaypoint(true); wpState.hereUntil = -1; mHoldAt = -1; mHoldOpened = false;
+    if (wpEl) { wpState.hidden = true; wpEl.hidden = true; if (wpEl.style) wpEl.style.display = 'none'; }
+  }
   if (document.body) document.body.classList.toggle('walk', on);
 }
 
@@ -4591,7 +4962,7 @@ function setWalkMode(on, spec) {
   camKey = ''; camFrom.on = false; stationFade = 0;
   setHudVisible(false);
   camera.fov = savedFov; camera.near = savedNear; camera.updateProjectionMatrix();
-  camMode = prevCamMode === 'orbit' ? 'orbit' : 'free';
+  camMode = 'orbit';   // v12.1: the overview is always the orbit camera
   applyCameraMode();
   camAnim = null; followId = null;
   // the camera is at eye level where the walk ended; float back to the overview from there
@@ -5421,7 +5792,7 @@ function updateLighting(dt, time) {
    attached (disabled) so focus, follow, reset, and the cinematic orbit keep using controls.target, which
    is re-derived every frame as the ground point the camera looks at.
    'orbit': the classic OrbitControls behavior around the view target. */
-let camMode = 'free';
+let camMode = 'orbit';   // v12.1: orbit is the only overview camera (Jackson: the free roam camera is not needed)
 const FREE = { btn: -1, lastX: 0, lastY: 0 };
 const _fwd = new THREE.Vector3(), _rgt = new THREE.Vector3();
 function applyZoomLimits() {
@@ -5450,8 +5821,8 @@ function applyCameraMode() {
 }
 function setCameraMode(mode) {
   // While walking, remember the choice for when walk mode ends instead of switching under the player.
-  if (camMode === 'walk') { prevCamMode = mode === 'orbit' ? 'orbit' : 'free'; return; }
-  camMode = mode === 'orbit' ? 'orbit' : 'free';
+  if (camMode === 'walk') { prevCamMode = 'orbit'; return; }
+  camMode = 'orbit';   // v12.1: 'free' is no longer offered; any request lands on orbit
   applyCameraMode();
   if (controls) { syncFreeTarget(); controls.update(); }
 }
@@ -5524,6 +5895,13 @@ function bindKeys() {
       if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation(); else ev.stopPropagation();
       return;
     }
+    // v13: Esc closes the open town map the same way (ui.js and the walk keys never see the press)
+    if (ev.key === 'Escape' && mapOpenNow()) {
+      closeMap();
+      ev.preventDefault();
+      if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation(); else ev.stopPropagation();
+      return;
+    }
     if (ev.key !== 'Tab' || camMode !== 'walk' || gameMode || subwayPhase || !player || !player.cart) return;
     if (typingInField() || ev.altKey || ev.ctrlKey || ev.metaKey) return;
     if (!ev.repeat) WALK.drive = true;
@@ -5536,6 +5914,14 @@ function bindKeys() {
     // v11: the shop modal owns the keys wherever it opened from (the kiosk, the header, the
     // runner card); Esc closed it in the capture listener above, nothing else reaches the game
     if (shopOpen()) { clearSubKeys(); clearWalkKeys(); return; }
+    // v13: the open town map owns the keys: G goes, M closes, the walk keys stay muted
+    if (mapOpenNow()) {
+      clearWalkKeys();
+      if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
+      if (k === 'g' && !ev.repeat) { goRoute(); ev.preventDefault(); return; }
+      if (k === 'm' && !ev.repeat) { closeMap(); mHoldAt = -1; mHoldOpened = true; ev.preventDefault(); return; }
+      return;
+    }
     // v6: the runner owns the keys in game mode (Ctrl is the duck key there, so the modifier guard comes after)
     if (gameMode === 'subway') { if (subwayKey(k, ev, true)) ev.preventDefault(); return; }
     if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
@@ -5546,9 +5932,16 @@ function bindKeys() {
       WALK.run = ev.shiftKey;
       if (subwayPhase) { ev.preventDefault(); return; }   // v6: nothing moves while the overlay fades around the scene switch
       if (k === 'Escape') { if (pointerLocked) releaseLock(); else setWalkMode(false); return; }
-      // v11: H summons or dismisses the hoverboard, M toggles the minimap
+      // v11: H summons or dismisses the hoverboard; M toggles the corner minimap (on the key up, v13:
+      // held M_HOLD it opens the town map instead, and Shift+M opens it at once)
       if (k === 'h') { if (!ev.repeat) WALK.hover = true; ev.preventDefault(); return; }
-      if (k === 'm') { if (!ev.repeat && minimap) minimap.toggle(); ev.preventDefault(); return; }
+      if (k === 'm') {
+        if (!ev.repeat) {
+          if (ev.shiftKey) { openMap(); mHoldAt = -1; mHoldOpened = true; }
+          else { mHoldAt = nowMs(); mHoldOpened = false; }
+        }
+        ev.preventDefault(); return;
+      }
       if (k in WALK_KEY_MAP) { WALK[WALK_KEY_MAP[k]] = true; ev.preventDefault(); return; }
       // Space: the jump or dive edge plus the held state for the golf charge (CONTRACT_V5 "Golf controller")
       if (k === ' ') { if (!ev.repeat) WALK.jump = true; WALK.jumpHeld = true; ev.preventDefault(); return; }
@@ -5573,6 +5966,11 @@ function bindKeys() {
     if (k === ' ') WALK.jumpHeld = false;
     if (k in KEY_MAP) keyState[KEY_MAP[k]] = false;
     if (k in WALK_KEY_MAP) WALK[WALK_KEY_MAP[k]] = false;
+    // v13: a short M press toggles the corner minimap; a hold that opened the map (or a Shift+M) does not
+    if (k === 'm') {
+      if (mHoldAt >= 0 && !mHoldOpened && nowMs() - mHoldAt < M_HOLD * 1000) { if (camMode === 'walk' && !mapOpenNow() && !shopOpen() && minimap && !typingInField()) minimap.toggle(); }
+      mHoldAt = -1; mHoldOpened = false;
+    }
     subwayKey(k, ev, false);   // v6: releases the held duck
   });
   window.addEventListener('blur', () => { for (const k in keyState) keyState[k] = false; clearWalkKeys(); clearSubKeys(); });
@@ -5667,7 +6065,8 @@ function stepWorld(dt) {
   updateBirds(dt, time);
   if (hiRing) hiRing.update(dt, time);
   updateOverlays();
-  updateMinimap(time);   // v11: after the player and the prompt target of this frame
+  stepMHold();           // v13: M held opens the town map
+  updateMinimap(time);   // v11: after the player and the prompt target of this frame; v13: the route and the HUD line
   if (touch) syncTouchMode();   // v12: the layer's buttons follow the player state
 }
 /* v6: in game mode the runner's own scene and camera replace the town. */
@@ -5929,6 +6328,15 @@ TT.town = {
   get shop() { return shop; },
   get minimap() { return minimap; },
   openShop(context) { return openShopFrom(context || 'kiosk'); },
+  /* v13 (CONTRACT_V13 "Waypoints and directions"): the town map, the waypoint, the route and Go. */
+  openMap() { return openMap(); },
+  closeMap() { return closeMap(); },
+  mapOpen() { return mapOpenNow(); },
+  setWaypoint(x, z) { return setWaypoint(x, z); },
+  get waypoint() { return WP.set ? { x: WP.x, z: WP.z } : null; },
+  get route() { const out = new Array(routeOk ? routeN : 0); for (let i = 0; i < out.length; i++) out[i] = { x: ROUTE_PTS[i].x, z: ROUTE_PTS[i].z }; return out; },
+  go() { return goRoute(); },
+  waypointHudId: WP_HUD_ID,
   waterLevelAt(x, z) { return waterLevelAt(x, z); },
   /* Camera (CONTRACT_V2 "Camera") */
   focusOn(kind, id) { return focusOn(kind, id); },
@@ -5952,7 +6360,9 @@ TT.town = {
     // v11
     wallet, shop, minimap, minimapMount, hoverRec, boatRecs, boatCounts, waterwayIdx, chaserChs, promptTarget: _pt, mmView, kioskPrompt: KIOSK_PROMPT, runnerState: rState,
     // v12
-    isTouch, touchLive, touchCoarse, touch, touchMount, touchIn: TOUCH_IN, touchKey, rippleMesh, natureCounts: natureInstanceCounts, natureFull, fog, walkInput, subInput, lastPointerType }; },
+    isTouch, touchLive, touchCoarse, touch, touchMount, touchIn: TOUCH_IN, touchKey, rippleMesh, natureCounts: natureInstanceCounts, natureFull, fog, walkInput, subInput, lastPointerType,
+    // v13
+    waypoint: WP, routePts: ROUTE_PTS, routeOut: ROUTE_OUT, routeN, routeOk, routeAt, routeBoat, routeToPin, routeEnd: { x: routeEndX, z: routeEndZ }, routeTile: { x: routeTileX, z: routeTileZ }, mapOpen: mapOpenNow(), wpEl, wpState, wpHudId: WP_HUD_ID, mHoldAt, mHoldOpened }; },
 };
 if (TT.sim) { TT.deptStats = TT.sim.deptStats; TT.darkness = TT.sim.darkness; }
 if (typeof TT._readyResolve === 'function') TT._readyResolve();

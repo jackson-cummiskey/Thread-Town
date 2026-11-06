@@ -32,7 +32,15 @@ Original v11 scope (built):
 - **Boats you can drive**: the marina and pier boats become rideable (a boat controller like the scooter's, on the lake and the river, slower turning, a wake; dock at the marina slips or the pier; E to board and to tie up). Agents stay on foot.
 - Plus Jackson's fixes from testing v10.
 
-## Built 2026-11-05, awaiting Jackson's phone test: v12 phone (docs/CONTRACT_V12.md)
+## Built 2026-11-06: v12.1 and v13 (final touches before Jackson leaves on 2026-11-10)
+
+- Orbit is the only overview camera (the free roam option is gone).
+- Swim everywhere: wade in from any gentle bank, float at that body's surface, climb out on low banks; cliffs stay blocked.
+- Bridges: longer gentler spans where the paths allow, arches only as tall as the boat clearance needs (1.05), no loose deck slab past a span; hole 6's tee follows the shore ground.
+- v13 map (docs/CONTRACT_V13.md): the corner minimap opens into a labelled town map (Shift+M, the expand glyph, the phone Map button); tap sets a waypoint, the route follows the sim's paths and shows on both maps, the HUD gives distance and bearing, Go walks you there.
+- Still humped: the creek mouth cart bridge and the marina footbridge (about 0.3 per tile) because their paths turn at the banks.
+
+## Built 2026-11-05: v12 phone (docs/CONTRACT_V12.md)
 
 Touch layer (js/touch.js: joystick, buttons per mode, look drag, pinch, runner swipes), orbit camera and the Phone quality tier by default on coarse-pointer devices, phone layouts (collapsed header with a Menu button, 120 px minimap above the buttons). Laptop path verified identical. Checked in the browser pane at 375 by 812: no console errors, no horizontal scroll, buttons E, View, Map, Jump in walk mode.
 
