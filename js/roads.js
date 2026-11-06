@@ -635,7 +635,10 @@ export function buildRoads(ctx) {
       return best;
     };
     const loEnd = ribbonEnd(lo0 - 0.5, lo0 + 1.5, true), hiEnd = ribbonEnd(hi0 - 1.5, hi0 + 0.5, false);
-    const lo = loEnd !== null ? loEnd : lo0, hi = hiEnd !== null ? hiEnd : hi0;
+    // v12.1: with no ribbon end to meet, the deck reaches half a tile past the span (the ribbon's
+    // last sample is within half a tile of the span edge), not a whole tile: the extra tile used
+    // to lie on the bank as a loose slab leading nowhere (the marina footbridge)
+    const lo = loEnd !== null ? loEnd : lo0 + 0.5, hi = hiEnd !== null ? hiEnd : hi0 - 0.5;
     if (hi - lo < 1.5) continue;
     const pts = dx ? [[lo, c], [hi, c]] : [[c, lo], [c, hi]];
     const rs = resample(pts, STEP);

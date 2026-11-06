@@ -85,7 +85,7 @@ export const TERRAIN = {
   water: { shoreLift: 0.9, shoreR: 1.5, wallBankW: 1.5, wallNear: 3, bankNoiseWl: 30, maxBank: 9 },
   // v11: a waterway's shore floor sits this much above its surface; a boat needs this much deck
   // clearance over the water; a bank dock pad stands this much above its slip's surface
-  waterway: { shoreLift: 0.2, clearance: 1.2, dockLift: 0.3 },
+  waterway: { shoreLift: 0.2, clearance: 1.05, dockLift: 0.3 },   // v12.1: clearance 1.05 (a seated rider's head clears it) so short decks over low banks hump less
   kicker: { near: 0.4, far: 0.8 },   // the ramp's rise at the shared edge and at the lip's far edge over the foot's ground
   island: { height: 0.6 },
   plateau: { blend: 2 },
@@ -948,7 +948,14 @@ export function buildTerrain(ctx) {
     const rowShore = r => { for (let o = across[0]; o <= across[1]; o++) { const x = dx ? ax + dx * r + (dx < 0 ? 1 : 0) : ax + o, y = dx ? ay + o : ay + dy * r + (dy < 0 ? 1 : 0); if (!inV(x, y)) continue; const k = idx(x, y); if (pinned[k] === 5 || waterD[k] <= 1.5) return true; } return false; };
     // v11: the arch, a cosine hump of `arch` at mid span and zero at the ends, lifts the deck
     // above the straight ramp; the approach rows take it too, so the field meets the deck
-    const arch = Number.isFinite(br.arch) ? clampv(br.arch, 0, 1.5) : 0;
+    const archPlan = Number.isFinite(br.arch) ? clampv(br.arch, 0, 1.5) : 0;
+    // v12.1: the hump is only as tall as the boats need. The plan's arch is the most a deck may
+    // rise at mid span; when the ramp between the banks already clears the water (high banks,
+    // the channel cart bridge) the arch shrinks toward zero, so decks are long gentle curves,
+    // not humps. The floor set in the clear zone assumed the full arch, so this never loses clearance.
+    const zone0 = clearZones.find(z => z.id === br.id) || null;
+    const need = zone0 ? zone0.surface + T.waterway.clearance - lerp(hA, hB, 0.5) : 0;
+    const arch = zone0 ? clampv(Math.min(archPlan, Math.max(0, need)), 0, 1.5) : archPlan;
     const hump = t => arch ? arch * 0.5 * (1 - Math.cos(2 * Math.PI * t)) : 0;
     for (let r = 0; r <= count; r++) {
       const v = lerp(hA, hB, r / count) + hump(r / count);
