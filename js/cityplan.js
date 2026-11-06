@@ -543,7 +543,7 @@ export const PLAN = {
     { id: 'creek-footbridge', name: 'Creek footbridge', a: [48, 89], b: [53, 89], width: 1, kind: 'foot', arch: 0, waterway: 'creek-park', purpose: 'the creek path over the creek at the pond lot south edge' },
     { id: 'creek-road-bridge', name: 'Links Road creek bridge', a: [47, 93], b: [54, 93], width: 3, kind: 'low', arch: 0.3, waterway: 'creek-park', purpose: 'Links Road over the creek, a low stone deck humped 0.4; three rows (92..94) so the road step from rows 93..94 to 92..93 at x 50 is on the deck and no paving tile abuts the creek' },
     { id: 'creek-cart-bridge', name: 'Creek mouth cart bridge', a: [47, 106], b: [51, 106], width: 2, kind: 'cart', arch: 0.6, waterway: 'creek-links', purpose: 'the west cart path and the lakeshore path over the creek mouth, a humpbacked plank deck two planks wide (rows 105..106) so the cart fits on it like the links footbridge' },
-    { id: 'channel-footbridge', name: 'Marina footbridge', a: [58, 112], b: [58, 117], width: 1, kind: 'foot', arch: 0.6, waterway: 'channel', purpose: 'the lakeshore path over the channel mouth beside the marina, a humpbacked plank deck' },
+    { id: 'channel-footbridge', name: 'Marina footbridge', a: [58, 112], b: [58, 114], width: 1, kind: 'foot', arch: 0.6, waterway: 'channel', purpose: 'the lakeshore path over the channel mouth beside the marina, a humpbacked plank deck' },
     { id: 'channel-cart-bridge', name: 'Channel cart bridge', a: [85, 117], b: [85, 121], width: 2, kind: 'cart', arch: 0.5, waterway: 'channel', purpose: 'the west cart path over the channel near the river bank, two planks wide (x 84..85) so the cart fits on it like the links footbridge' },
   ],
   docks: DOCKS,
