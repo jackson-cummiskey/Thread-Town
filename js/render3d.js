@@ -113,6 +113,7 @@ import * as VEHICLES from './vehicles.js';
 import { createWallet, itemById as walletItemById } from './wallet.js';
 import { createShop } from './shop.js';
 import { createMinimap } from './minimap.js';
+import { buildStatue } from './statue.js';
 import * as TOUCH from './touch.js';
 import * as exec from './depts/exec.js';
 import * as embedded from './depts/embedded.js';
@@ -207,6 +208,7 @@ let bulbMat = null, poolMat = null, poolMesh = null;
 const lampLights = [];
 let fountain = null;
 let leisure = null;            // { group, update, lights } from leisure3d
+let statue = null;             // v14: the founder's statue { group, update, near, frontPos, open, close, isOpen } from statue.js
 let city = null;               // v7: { group, update, lights, lightBase, glass } from city.js
 /* v10: the blended ground (js/ground.js), the road ribbons (js/roads.js), the nature layer
    (js/nature.js), the interaction highlight ring, the water bodies and the quality mode. */
@@ -355,6 +357,7 @@ let waterwayIdx = null;        // tile -> waterBodies index + 1 for the creek an
 const chaserChs = [];          // the runner's chaser characters (kept for the session)
 const KIOSK_PROMPT = { text: 'Shop', key: 'E', full: 'E  Shop' };
 const KIOSK_REACH = 1.5;
+const STATUE_PROMPT = { text: 'Read the plaque', key: 'E', full: 'E  Read the plaque' };   // v14
 const _kf = { x: 0, y: 0 };    // kioskFrontPos scratch
 const mmView = { x: 0, z: 0, yaw: Math.PI, target: null, mode: 'walk', time: 0 };   // the minimap view, reused
 const mmTarget = { x: 0, z: 0 };
@@ -2261,6 +2264,7 @@ function promptTarget(p, text) {
     return i >= 0 ? ptSet(dockPosX(ds[i]), dockPosZ(ds[i]), 0.9) : _pt;
   }
   if (text === 'Shop') { const f = kioskFrontPos(); return f ? ptSet(f.x, f.y, 0.9) : _pt; }
+  if (text === 'Read the plaque') return statue ? ptSet(statue.frontPos.x, statue.frontPos.y, 1.1) : _pt;   // v14
   // a station: the prompt is the activity label, or 'Try: ' plus the label
   for (const rec of buildingRecs) {
     if (rec.isCafe || !rec.worldAnchor || !rec.label) continue;
@@ -2642,6 +2646,34 @@ function buildCityDressing() {
   for (const l of city.lights) { l.visible = false; if (!l.parent) city.group.add(l); }
   registerGroupMaterials(city.group);
   scene.add(city.group);
+  buildFounderStatue();
+}
+/* v14: the founder's statue on the plan's statue tile, on the plaza ground, facing its rot (0 = south). */
+function buildFounderStatue() {
+  const sp = TT.sim.PLAN && TT.sim.PLAN.statue;
+  if (!sp || statue) return;
+  try {
+    const cx = sp.x + 0.5, cz = sp.y + 0.5;
+    statue = buildStatue({ x: cx, z: cz, y: hAt(cx, cz) + liftAt(cx, cz), yaw: (sp.rot || 0) * Math.PI / 180 });
+    registerGroupMaterials(statue.group);
+    scene.add(statue.group);
+  } catch (e) { console.error('Thread Town: the statue failed to build', e); statue = null; }
+}
+function plaqueOpen() { return !!(statue && statue.isOpen()); }
+function statueCanOpen() {
+  if (!statue || !walkOn || !player || !player.active || gameMode || subwayPhase || insideRoom) return false;
+  const p = player;
+  return p.state === 'idle' && !p.fade && !p.interior && !p.exiting;
+}
+function syncStatueWalk(p) {
+  if (subwayPhase || !statueCanOpen() || !statue.near(p.pos.x, p.pos.y)) return;
+  if (p.prompt !== SUBWAY_PROMPT && p.prompt !== KIOSK_PROMPT) p.prompt = STATUE_PROMPT;
+}
+function openPlaque() {
+  if (!statue) return;
+  try { if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock(); } catch (e) { /* no lock to release */ }
+  clearWalkKeys();
+  statue.open();
 }
 /* The overview draw-call estimate: every visible renderable object under the scene (the active
    interior room and the runner scene excluded). Not part of the contract; for tuning. */
@@ -3276,6 +3308,8 @@ function feedPlayerInput() {
   if (walkInput.interact && subwayCanEnter() && inSubwayZone(player.pos.x, player.pos.y)) { walkInput.interact = false; requestSubway(TT.state.time); }
   // v11: the kiosk prompt belongs to the renderer too: E in front of the kiosk opens the shop
   if (walkInput.interact && kioskCanOpen() && nearKiosk(player.pos.x, player.pos.y)) { walkInput.interact = false; openShopFrom('kiosk'); }
+  // v14: and E in front of the founder's statue opens the plaque note
+  if (walkInput.interact && player.prompt === STATUE_PROMPT && statueCanOpen() && statue.near(player.pos.x, player.pos.y)) { walkInput.interact = false; openPlaque(); }
   walkInput.hover = WALK.hover || !!(ext && ext.hover) || !!(tin && tin.hover);                      // v11: H, the hoverboard edge
   walkInput.boost = WALK.run || !!(ext && (ext.boost || ext.run)) || !!(tin && tin.boost);          // v11: Shift held boosts while riding; v12: the Boost button
   if (ext && ext.map && minimap) minimap.toggle();                                                   // v11: the headless M toggles the corner map
@@ -3284,7 +3318,7 @@ function feedPlayerInput() {
   if (ext && ext.closeMap) closeMap();
   if (ext && ext.go) goRoute();                                                                      // v13: headless Go
   // v11: while the shop modal is up the keys belong to it (ui.js treats it as an open modal); v13: the open map too
-  if (subwayPhase || shopOpen() || mapOpenNow()) { walkInput.fwd = 0; walkInput.side = 0; walkInput.run = false; walkInput.jump = false; walkInput.jumpHeld = false; walkInput.interact = false; walkInput.hover = false; walkInput.boost = false; }
+  if (subwayPhase || shopOpen() || mapOpenNow() || plaqueOpen()) { walkInput.fwd = 0; walkInput.side = 0; walkInput.run = false; walkInput.jump = false; walkInput.jumpHeld = false; walkInput.interact = false; walkInput.hover = false; walkInput.boost = false; }
   walkInput.toggleView = WALK.view || !!(ext && ext.toggleView) || !!(tin && tin.toggleView);
   walkInput.lookDX = WALK.lookDX + (ext && isFinite(ext.lookDX) ? ext.lookDX : 0) + (tin && isFinite(tin.lookDX) ? tin.lookDX : 0);
   walkInput.lookDY = WALK.lookDY + (ext && isFinite(ext.lookDY) ? ext.lookDY : 0) + (tin && isFinite(tin.lookDY) ? tin.lookDY : 0);
@@ -3369,7 +3403,7 @@ function applyTouchLayout() {
 function touchModeNow() {
   if (!touchLive || !walkOn || !player) return 'none';
   if (gameMode === 'subway') return 'runner';
-  if (subwayPhase || shopOpen() || mapOpenNow()) return 'none';   // v13: the open town map takes the view like the shop
+  if (subwayPhase || shopOpen() || mapOpenNow() || plaqueOpen()) return 'none';   // v13: the open town map takes the view like the shop
   const s = player.state;
   return s === 'hover' ? 'hover' : s === 'scooter' ? 'ride' : s === 'boat' ? 'boat' : s === 'golf' ? 'golf' : s === 'cart' ? 'cart' : 'walk';
 }
@@ -3642,6 +3676,7 @@ function syncPlayer(dt, time) {
   // (v8: the round summary is read from player.golf in every player state)
   syncSubwayWalk(p, time);
   syncKioskWalk(p);           // v11: 'E  Shop' in front of the kiosk
+  syncStatueWalk(p);          // v14: 'E  Read the plaque' in front of the founder's statue
   noteGolfRound(p.golf || null);
 
   // contact shadow under the character, squashed a little while hopping, off while swimming, in
@@ -5895,6 +5930,13 @@ function bindKeys() {
       if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation(); else ev.stopPropagation();
       return;
     }
+    // v14: and the plaque note
+    if (ev.key === 'Escape' && plaqueOpen()) {
+      statue.close();
+      ev.preventDefault();
+      if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation(); else ev.stopPropagation();
+      return;
+    }
     // v13: Esc closes the open town map the same way (ui.js and the walk keys never see the press)
     if (ev.key === 'Escape' && mapOpenNow()) {
       closeMap();
@@ -5914,6 +5956,8 @@ function bindKeys() {
     // v11: the shop modal owns the keys wherever it opened from (the kiosk, the header, the
     // runner card); Esc closed it in the capture listener above, nothing else reaches the game
     if (shopOpen()) { clearSubKeys(); clearWalkKeys(); return; }
+    // v14: the plaque note owns the keys; E or Enter closes it
+    if (plaqueOpen()) { clearWalkKeys(); if ((k === 'e' || k === 'Enter') && !ev.repeat) { statue.close(); ev.preventDefault(); } return; }
     // v13: the open town map owns the keys: G goes, M closes, the walk keys stay muted
     if (mapOpenNow()) {
       clearWalkKeys();
@@ -6054,6 +6098,7 @@ function stepWorld(dt) {
   if (city) city.update(dt, time, nightS);   // v7: traffic lights, flags, bulbs
   if (roads) roads.update(dt, time, nightS);   // v10: the markings glow a little at night
   if (nature) nature.update(dt, time);         // v10: the canopy, tuft and reed sway
+  if (statue) statue.update(dt, time, nightS); // v14: the halo turns, the gold glows at night
   syncAgents(dt, time);
   syncScooters(dt);   // v9: after the agents, so ridden scooters sit under this frame's riders
   syncBoats(dt);      // v11: the moored and beached boats in every camera mode (the ridden one was synced with the player)
@@ -6332,6 +6377,8 @@ TT.town = {
   openMap() { return openMap(); },
   closeMap() { return closeMap(); },
   mapOpen() { return mapOpenNow(); },
+  plaqueOpen() { return plaqueOpen(); },   // v14
+  get statue() { return statue; },
   setWaypoint(x, z) { return setWaypoint(x, z); },
   get waypoint() { return WP.set ? { x: WP.x, z: WP.z } : null; },
   get route() { const out = new Array(routeOk ? routeN : 0); for (let i = 0; i < out.length; i++) out[i] = { x: ROUTE_PTS[i].x, z: ROUTE_PTS[i].z }; return out; },

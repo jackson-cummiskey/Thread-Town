@@ -276,6 +276,7 @@ function buildLabels(sim, state, plan) {
   if (state.pier && state.pier.base) add('Pier', state.pier.base.x, state.pier.base.y, 1);
   if (state.marina && state.marina.pos) add('Marina', state.marina.pos.x, state.marina.pos.y, 1);
   if (state.kiosk && state.kiosk.pos) add('Kiosk', state.kiosk.pos.x, state.kiosk.pos.y, 2);
+  if (plan && plan.statue) add('Our great founder', plan.statue.x + 0.5, plan.statue.y + 0.5, 1);   // v14
   if (state.pond && state.pond.center) add('Pond', state.pond.center.x, state.pond.center.y, 1);
   for (const w of (plan && plan.water) || []) {
     if (!w) continue;

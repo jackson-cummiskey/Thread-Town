@@ -547,7 +547,7 @@
     document.addEventListener('click', ev => { if (menuOpen() && !ev.target.closest('header')) setMenu(false); });
   }
   function anyModalOpen() {
-    return mapOpen() || ['#modal', '#walk-modal', '#leaderboard-modal', '#shop-modal'].some(id => { const el = $(id); return el && el.classList.contains('open'); });
+    return mapOpen() || ['#modal', '#walk-modal', '#leaderboard-modal', '#shop-modal', '#plaque-modal'].some(id => { const el = $(id); return el && el.classList.contains('open'); });
   }
   /* v13 (CONTRACT_V13 "The town map"): the open town map counts as a modal for Tab and Esc; the renderer owns it. */
   function mapOpen() {

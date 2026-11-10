@@ -790,3 +790,15 @@ html.touch #walk-waypoint { left: 12px; right: auto; transform: none; bottom: 56
 @media (max-width: 640px), (max-height: 520px) {
   html.touch #walk-waypoint { bottom: 52px; left: 140px; max-width: calc(100% - 290px); }
 }
+
+/* v14: the founder's plaque note */
+#plaque-modal { position: fixed; inset: 0; background: rgba(0,10,20,0.66); display: none; align-items: center; justify-content: center; z-index: 22; }
+#plaque-modal.open { display: flex; }
+#plaque-modal .plaque-card { width: min(560px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow-y: auto; border: 2px solid #D9AE2F; text-align: center; }
+#plaque-modal .plaque-kicker { margin: 0; color: #D9AE2F; font-family: Kanit, Inter, sans-serif; font-weight: 600; font-size: 16px; letter-spacing: 0.04em; }
+#plaque-modal h2 { margin: 2px 0 0; font-family: Kanit, Inter, sans-serif; font-size: 34px; line-height: 1.1; }
+#plaque-modal .plaque-line { margin: 4px 0 14px; color: var(--aqua); font-size: 14px; }
+#plaque-modal .plaque-note { margin: 0 0 12px; text-align: left; font-size: 14px; line-height: 1.55; color: var(--text); }
+#plaque-modal .actions { display: flex; justify-content: center; margin-top: 6px; }
+html.touch #plaque-modal .plaque-card { width: calc(100% - 16px); padding: 16px 14px; }
+html.touch #plaque-modal h2 { font-size: 28px; }

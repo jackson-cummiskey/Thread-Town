@@ -549,6 +549,7 @@ export const PLAN = {
   docks: DOCKS,
   kickers: KICKERS,
   kiosk: KIOSK,
+  statue: { x: 77, y: 59, rot: 0, name: 'The founder' },   // v14: the founder's statue at the north end of the plaza, facing the fountain (3 by 3 feature tiles)
   plaza: { pts: [[71, 56], [83, 56], [86, 59], [86, 71], [83, 74], [71, 74], [68, 71], [68, 59]] },
   fountain: { x: 77, y: 65 },
   subway: { x: 80, y: 72, rot: 0 },
@@ -896,6 +897,9 @@ export function rasterizePlan(plan) {
     for (let k = 1; k <= 5; k++) { const x = mr.x + dir.x * k, y = mr.y + dir.y * k; if (at(x, y) === M.WATER) { set(x, y, M.DECK); deck.push({ x, y }); } }
     marina = { tile: { x: mr.x, y: mr.y }, rot: mr.rot || 0, dir, deck, slips: mr.slips || 4 };
   }
+
+  /* 7a. v14: the founder's statue, a 3 by 3 feature block like the fountain basin */
+  if (plan.statue) { const f = plan.statue; for (let y = f.y - 1; y <= f.y + 1; y++) for (let x = f.x - 1; x <= f.x + 1; x++) set(x, y, M.FEATURE); }
 
   /* 7b. v11: the shop kiosk (a feature tile on the plaza), the docks and the kickers as records */
   let kiosk = null;
