@@ -213,7 +213,13 @@ export function createTouch(ctx) {
   function closeMenu() {
     if (!doc || !doc.getElementById) return;
     const m = doc.getElementById('menu-toggle');
-    if (m && m.checked) m.checked = false;
+    if (m && m.checked) {
+      m.checked = false;
+      // v14: unchecking from script fires no change event, so tell ui.js (aria-expanded and body.menu-open follow)
+      if (typeof m.dispatchEvent === 'function' && typeof Event === 'function') {
+        try { m.dispatchEvent(new Event('change')); } catch (e) { /* no event model here: the checkbox is closed all the same */ }
+      }
+    }
   }
 
   /* ----- the joystick ----- */

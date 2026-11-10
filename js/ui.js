@@ -840,12 +840,13 @@
       // While the pointer is locked, Esc only releases the lock (the browser does that); the
       // renderer handles a second Esc. Never exit board mode or reset the view from here then.
       if (document.pointerLockElement) return;
-      if (menuOpen()) { setMenu(false); return; }   // v12: the phone menu closes first
-      closeAdd();
+      // v14: a press that closed something here stops, so the renderer's window listener does not also leave walk mode
+      if (menuOpen()) { setMenu(false); ev.stopPropagation(); return; }   // v12: the phone menu closes first
+      if ($('#modal').classList.contains('open')) { closeAdd(); ev.stopPropagation(); return; }
       if (shopOpen()) { closeShop(); return; }
       if (mapOpen()) { closeMap(); return; }   // v13: the renderer's capture listener normally closes it first
-      if ($('#leaderboard-modal').classList.contains('open')) { closeLeaderboard(); return; }
-      if ($('#walk-modal').classList.contains('open')) { closeWalkModal(); return; }
+      if ($('#leaderboard-modal').classList.contains('open')) { closeLeaderboard(); ev.stopPropagation(); return; }
+      if ($('#walk-modal').classList.contains('open')) { closeWalkModal(); ev.stopPropagation(); return; }
       if (walkOn()) return; // the renderer exits walk mode (and quits the subway) and resets the view itself
       if (document.body.classList.contains('board')) setBoard(false);
       else TT.town.resetView();

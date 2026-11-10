@@ -353,6 +353,7 @@ export function buildNature(ctx) {
   if (plan.pier) addRing(plan.pier.x, plan.pier.y, F_ALL);
   if (plan.marina) addRing(plan.marina.x, plan.marina.y, F_ALL);
   if (R.marina) for (const t of R.marina.deck) addRing(t.x, t.y, F_ALL);
+  for (const dk of R.docks || []) if (dk && dk.tile) addRing(dk.tile.x, dk.tile.y, F_ALL);   // v14: the v11 docks keep their ring clear, as the sim does for its own trees
   if (plan.spawn) addRing(plan.spawn.x, plan.spawn.y, F_ALL);
   if (plan.fountain) addRing(plan.fountain.x, plan.fountain.y, F_ALL, 2);
   for (const l of state.lamps || []) add(Math.floor(l.x), Math.floor(l.y), F_ALL);
@@ -584,6 +585,33 @@ export function buildNature(ctx) {
     if (!roadClear(wx, wz, reach)) { counts.roadSkipped = (counts.roadSkipped || 0) + 1; continue; }
     record(kind, wx, wz, hAt(wx, wz), { yaw, sx, sy, sz, dl, dark });
     occ[i] = 1;
+  }
+  /* 4b. v14: the hole 6 island's rim follows the tile grid (a 2.2 drop in one tile, right angle
+     corners). One cliff rock per rim edge, a little outside the edge and seated on the face with
+     its top about level with the rim, breaks the line up; the edges at the footbridge landing
+     stay clear. Drawn only (the cliff rock instances), nothing in the logic layer. */
+  {
+    const isl = new Set((R.islandTiles || []).map(t => t.x + ',' + t.y));
+    const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (const t of R.islandTiles || []) for (let k = 0; k < 4; k++) {
+      const dx = DIRS[k][0], dy = DIRS[k][1], nx = t.x + dx, ny = t.y + dy;
+      if (!inMap(nx, ny) || isl.has(nx + ',' + ny)) continue;
+      const r = rngAt(t.x, t.y, 43 + k);
+      const along = (r() - 0.5) * 0.4;
+      const wx = t.x + 0.5 + dx * 0.8 + dy * along, wz = t.y + 0.5 + dy * 0.8 + dx * along;
+      // nothing within a rock's reach of a deck tile (the footbridge and its landing)
+      let nearDeck = false;
+      for (let by = Math.floor(wz) - 2; by <= Math.floor(wz) + 2 && !nearDeck; by++) for (let bx = Math.floor(wx) - 2; bx <= Math.floor(wx) + 2; bx++) {
+        if (R.at(bx, by) !== MK.BRIDGE) continue;
+        if (Math.hypot(Math.max(bx - wx, 0, wx - bx - 1), Math.max(by - wz, 0, wz - by - 1)) < 0.9) { nearDeck = true; break; }
+      }
+      if (nearDeck) continue;
+      const sx = 0.95 + r() * 0.35, sy = 0.9 + r() * 0.3, sz = 0.95 + r() * 0.35;
+      // the rock's center (the instance sinks it 0.2): on the face, its top no higher than the island's turf
+      const yc = Math.min(hAt(wx, wz) + 0.1, hAt(t.x + 0.5, t.y + 0.5) - 0.6 * Math.max(sx, sy, sz));
+      record('cliff', wx, wz, yc + 0.2, { yaw: r() * TAU, sx, sy, sz, dl: (r() - 0.5) * 0.16, dark: r() < 0.45 });
+      counts.islandRimRocks = (counts.islandRimRocks || 0) + 1;
+    }
   }
 
   /* 5. grass tufts and flower beds: parks, yards, the plaza edges. */

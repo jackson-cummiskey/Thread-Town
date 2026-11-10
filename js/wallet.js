@@ -81,6 +81,7 @@ export function createWallet(storage) {
     : { get() { return null; }, set() {} };
 
   let w = emptyWallet();
+  let eqView = null;   // the record the equipped getter hands out
 
   /* Reads storage into memory. Unknown ids, bad counts and an equipped item that is not owned are dropped. */
   function load() {
@@ -218,7 +219,11 @@ export function createWallet(storage) {
 
   const api = {
     get coins() { return w.coins; },
-    get equipped() { return { board: w.equipped.board, hat: w.equipped.hat }; },
+    // v14: one record per look (a new one only when the look changes), so the per-frame readers allocate nothing
+    get equipped() {
+      if (!eqView || eqView.board !== w.equipped.board || eqView.hat !== w.equipped.hat) eqView = { board: w.equipped.board, hat: w.equipped.hat };
+      return eqView;
+    },
     get owned() { return Array.from(w.owned); },
     catalogue: CATALOGUE,
     itemById,

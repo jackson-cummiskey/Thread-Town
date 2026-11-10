@@ -94,6 +94,8 @@ The contract lets boats under a bridge only when the deck is at least 1.2 above 
 | `channel-cart-bridge` | the channel | `-0.9` | about `-0.3` + 0.8 | 1.4 | 0.8 |
 | `island-bridge` | the lake | `-0.9` | about `-0.6` | 0.3 | none: not on the boat network (the island ring is reached around it; the boat BFS reach counts the water under it, then `boatWater` clears its tiles from the mask (`boatWater.blocked`) so the sim, the validator and the boat controller all treat them as a bank) |
 
+Later versions lowered several of these humps and lengthened some spans; the values in force are in `js/cityplan.js` (v14: `creek-cart-bridge` is `arch: 0.3`, `channel-footbridge` `arch: 0.6`).
+
 The terrain verification adds: every bridge with a `waterway` or on the river below the gorge clears 1.2 at mid span. A new bridge kind `cart` joins `high`, `low` and `foot`; a `cart` bridge is 2 wide, since the cart planner closes any one tile deck (the island spur rule); `validatePlan` requires at least one `cart` and one `foot` bridge over a waterway, and the "three river bridges" rule counts only bridges without a `waterway`.
 
 ## Docks (`PLAN.docks`, `state.docks`)

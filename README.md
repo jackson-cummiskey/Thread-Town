@@ -45,7 +45,6 @@ Play it hosted: https://jackson-cummiskey.github.io/Thread-Town/ (GitHub Pages, 
 - `js/leisure3d.js` café stools and string lights, pier, diving board, ladder, floating rings, ripples and splashes, ice cream and coffee props
 - `js/render3d.js` Three.js world: camera, lighting and day/night, ground, buildings, trees, props, agents, overlays, picking, camera focus and follow, static-mesh merging
 - `js/ui.js` roster, inspector, utilization board, ticker, tooltip, add-agent form, board mode
-- `js/legacy/` the original 16px pixel renderer, kept for reference, not loaded
 - `docs/CONTRACT.md`, `docs/CONTRACT_V2.md` the interface contracts between modules
 - `docs/ART_DIRECTION.md` the art bible; `docs/CITY_DESIGN.md` the per-department building and activity spec; `docs/ZOO_DESIGN.md` the species recipes and zoo layout; `docs/CONTRACT_V3.md` the animal character contract; `docs/CONTRACT_V4.md` the walk-mode contract
 - `serve.js` tiny static server for local preview

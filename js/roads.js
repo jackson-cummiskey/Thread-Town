@@ -38,8 +38,8 @@
    the markings and allocates nothing. Mesh counts and the junction, crossing and bridge
    records are on group.userData.roadStats for the headless test. The result also carries
    surfaceLiftAt(x, z): how far the ribbon surface under a point stands above the terrain
-   (SIDEWALK_LIFT on a sidewalk tile, LIFT on a road tile and across a stub mouth, LIFT plus
-   DECK_LIFT on a bridge tile, 0 elsewhere) for whoever stands furniture or characters on the
+   (SIDEWALK_LIFT on a sidewalk tile, LIFT on a road, path or cart path tile and across a stub mouth, LIFT plus
+   DECK_LIFT on a bridge tile and anywhere under a deck, 0 elsewhere) for whoever stands furniture or characters on the
    ribbons. */
 
 import * as THREE from 'three';
@@ -312,7 +312,8 @@ export function buildRoads(ctx) {
     wood: mk(PAL.wood, { roughness: 0.8 }), woodDark: mk(PAL.woodDark, { roughness: 0.8 }),
     markStreet: decalMat(markStreetTex, PAL.marking, 0.0), markAvenue: decalMat(markAvenueTex, PAL.marking, 0.0),
     zebra: decalMat(zebraTex, '#FFFFFF', 0.8),
-    plank: plankTex ? (() => { const m = new THREE.MeshStandardMaterial({ map: plankTex, roughness: 0.85 }); m.userData.envMapIntensity = 0.2; return m; })() : mk(PAL.wood, { roughness: 0.85 }),
+    // v14: double sided, the plank sheet has no underside of its own and boats and swimmers pass under it
+    plank: plankTex ? (() => { const m = new THREE.MeshStandardMaterial({ map: plankTex, roughness: 0.85, side: THREE.DoubleSide }); m.userData.envMapIntensity = 0.2; return m; })() : mk(PAL.wood, { roughness: 0.85 }),
   };
   const sinks = {};
   for (const k of Object.keys(MATS)) sinks[k] = new Sink();
@@ -464,6 +465,11 @@ export function buildRoads(ctx) {
     // only surface there and the ribbon runs meet it a tile short of each end.
     const offDeck = new Array(n).fill(true);
     for (let i = 0; i < n; i++) { const tx = Math.floor(S[i].x), tz = Math.floor(S[i].y); if (tx >= 0 && tz >= 0 && tx < cols && tz < rows && raster.at(tx, tz) === MARK.BRIDGE) offDeck[i] = false; }
+    // v14: a road's own end sample that lands exactly on a span's edge (River Street's last one
+    // at x 86 floors onto the first deck tile) stays in the ribbon: the deck is trimmed to start
+    // at that sample, so dropping it left half a tile with no surface at all
+    if (n > 1 && !offDeck[0] && offDeck[1]) offDeck[0] = true;
+    if (n > 1 && !offDeck[n - 1] && offDeck[n - 2]) offDeck[n - 1] = true;
     for (const [i0, i1] of runsOf(offDeck, 2)) { sweep(surface, S, i0, i1, ribbonProfile, 1, ground); ribbons++; }
     if (!R.street) continue;
 
@@ -483,7 +489,12 @@ export function buildRoads(ctx) {
         for (let i = 0; i < n; i++) {
           const s = S[i], d = side * (hw + SIDEWALK_W / 2), qx = s.x + s.nx * d, qy = s.y + s.ny * d;
           if (qx < 0 || qy < 0 || qx > cols || qy > rows) continue;
-          if (inWater(qx, qy)) continue;
+          if (inWater(qx, qy) || !offDeck[i]) continue;
+          // v14: nor over a waterway or beside a deck (inWater only knows the river and the lake,
+          // so Links Road's sidewalks ran across the creek bridge and down into the creek)
+          { const qm = raster.at(Math.floor(qx), Math.floor(qy)); if (qm === MARK.WATER || qm === MARK.BRIDGE) continue; }
+          // (a deck reaches half a tile past its span: the sample on the span's far edge is cut too)
+          if (raster.at(Math.floor(qx - s.tx * 0.25), Math.floor(qy - s.ty * 0.25)) === MARK.BRIDGE || raster.at(Math.floor(qx + s.tx * 0.25), Math.floor(qy + s.ty * 0.25)) === MARK.BRIDGE) continue;
           if (otherNear(R, qx, qy, 0.0)) continue;   // cut exactly across the other road's paving, so two sidewalks meet at the corner
           if (stubGaps.some(c => c.R === R && c.side === side && Math.abs(c.s - s.s) <= XWALK_DEPTH / 2 + 0.05)) { flush[i] = true; continue; }
           keep[i] = true;
@@ -608,6 +619,7 @@ export function buildRoads(ctx) {
 
   /* ---------- 7. bridges ---------- */
   const bridges = [];
+  const deckRects = [];   // v14: each deck's footprint { x0, x1, z0, z1 } for surfaceLiftAt
   let piers = 0, arches = 0;
   for (const b of plan.bridges || []) {
     const [ax, ay] = b.a, [bx, by] = b.b;
@@ -658,10 +670,14 @@ export function buildRoads(ctx) {
     // to 0.3, leaving the visitor floating above the channel cart bridge and sunk in the creek ones.
     const sm = deckY;
     const deck = (x, z, i) => sm[i];
-    const kind = b.kind === 'high' || b.kind === 'low' || b.kind === 'foot' ? b.kind : (width >= 3 ? 'high' : 'low');
+    // v14: a cart bridge is a plank deck like the links footbridge (docs/V11_DESIGN.md and the
+    // plan's purpose strings); 'cart' used to fall through to a concrete slab with iron rails
+    const kind = b.kind === 'high' || b.kind === 'low' || b.kind === 'foot' ? b.kind : b.kind === 'cart' ? 'foot' : (width >= 3 ? 'high' : 'low');
     const n = S.length;
+    const slabT = kind === 'high' ? 0.5 : 0.22;
     const yawOf = s => Math.atan2(s.tx, s.ty);
     const rec = { id: b.id, kind, width, deckMin: Math.min(...sm), deckMax: Math.max(...sm), waterTop, piers: 0, length: rs.length, lo, hi };
+    deckRects.push(dx ? { x0: lo, x1: hi, z0: c - hw, z1: c + hw, alongX: true, c, floor: waterTop + 0.35 } : { x0: c - hw, x1: c + hw, z0: lo, z1: hi, alongX: false, c, floor: waterTop + 0.35 });
     if (kind === 'foot') {
       sweep(sinks.plank, S, 0, n - 1, [{ d: -hw, h: 0 }, { d: hw, h: 0 }], 1, deck, { uScale: 1 });
       for (const side of [1, -1]) {
@@ -675,7 +691,10 @@ export function buildRoads(ctx) {
       }
     } else {
       sweep(sinks.concrete, S, 0, n - 1, [{ d: -hw, h: 0 }, { d: 0, h: 0 }, { d: hw, h: 0 }], 1, deck);
-      sweep(sinks.concrete, S, 0, n - 1, [{ d: -hw, h: 0 }, { d: -hw, h: -0.5 }, { d: -hw, h: -0.5 }, { d: hw, h: -0.5 }, { d: hw, h: -0.5 }, { d: hw, h: 0 }], 1, deck);
+      // v14: a low bridge wears a thin slab so a boat's hull clears its underside (the arch gives 1.05 to the deck top)
+      // v14: the slab's sides and underside, in the order that winds the sides outward and the
+      // underside down (the other way round they were culled from the bank and from a boat)
+      sweep(sinks.concrete, S, 0, n - 1, [{ d: hw, h: 0 }, { d: hw, h: -slabT }, { d: hw, h: -slabT }, { d: -hw, h: -slabT }, { d: -hw, h: -slabT }, { d: -hw, h: 0 }], 1, deck);
       for (const side of [1, -1]) {
         if (kind === 'high') {
           sweep(sinks.stone, S, 0, n - 1, rectProfile(hw - 0.2, hw, 0, 0.95), side, deck, { caps: true });
@@ -698,7 +717,7 @@ export function buildRoads(ctx) {
       const i = indexAt(S, s), p = S[i], w = waterAt(p.x, p.y);
       if (!w) continue;
       pierAt.push(i);
-      const bed = Math.min(H(p.x, p.y), w.bed) - 0.4, top = sm[i] - (kind === 'foot' ? 0.26 : 0.5), hgt = Math.max(0.3, top - bed);
+      const bed = Math.min(H(p.x, p.y), w.bed) - 0.4, top = sm[i] - (kind === 'foot' ? 0.26 : slabT), hgt = Math.max(0.3, top - bed);
       const yaw = yawOf(p);
       for (const side of [1, -1]) {
         const d = side * Math.max(0.2, hw - (kind === 'foot' ? 0.2 : 0.45)), x = p.x + p.nx * d, z = p.y + p.ny * d;
@@ -750,17 +769,28 @@ export function buildRoads(ctx) {
 
   /* The ribbon surface above the terrain under a world point, by raster tile: the sidewalk slab
      top on a sidewalk tile (the road height on a stub mouth tile, where the slab drops flush),
-     the ribbon lift on a road or bridge tile, nothing elsewhere. city.js stands furniture on it
+     the ribbon lift on a road, path, cart path or bridge tile, nothing elsewhere. city.js stands furniture on it
      (its own fallback follows the same rule) and the renderer can place walkers on sidewalk
      tiles with it. */
   function surfaceLiftAt(x, z) {
     const tx = Math.floor(x), tz = Math.floor(z);
     if (!(tx >= 0 && tz >= 0 && tx < cols && tz < rows)) return 0;
     const m = raster.at(tx, tz);
-    if (m === MARK.SIDEWALK) return stubMouthTiles.has(tx + ',' + tz) ? LIFT : SIDEWALK_LIFT;
-    if (m === MARK.ROAD) return LIFT;
     if (m === MARK.BRIDGE) return LIFT + DECK_LIFT;   // the deck stands DECK_LIFT over the ribbon height
-    return 0;
+    let own = 0;
+    if (m === MARK.SIDEWALK) own = stubMouthTiles.has(tx + ',' + tz) ? LIFT : SIDEWALK_LIFT;
+    else if (m === MARK.ROAD) own = LIFT;
+    else if (m === MARK.PATH || m === MARK.CARTPATH) own = LIFT;   // v14: the gravel ribbon stands LIFT up too, so walkers stand on it and the step onto a plank deck is DECK_LIFT, not LIFT + DECK_LIFT
+    // v14: under a deck end, the deck top. A deck reaches up to half a tile past its span onto the bank (a path, a cart
+    // path or grass tile), where the tile's own lift left walkers 0.04 to 0.08 inside the planks. The deck is level
+    // across its width at its centre line's height (the deckY rule above), so the bank can also stand above it.
+    for (let i = 0; i < deckRects.length; i++) {
+      const r = deckRects[i];
+      if (x < r.x0 || x > r.x1 || z < r.z0 || z > r.z1) continue;
+      const d = Math.max(r.alongX ? H(x, r.c) : H(r.c, z), r.floor) + LIFT + DECK_LIFT - H(x, z);
+      if (d > own) own = d;
+    }
+    return own;
   }
 
   /* Per frame: the markings and zebras glow faintly at night (retroreflective paint). Nothing

@@ -1113,8 +1113,22 @@ export function buildCity(ctx) {
     const segs = splineSegments(rd.pts, 0.5), hw = roadWidth(rd) / 2;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const s of segs) { x0 = Math.min(x0, s.ax, s.bx); x1 = Math.max(x1, s.ax, s.bx); y0 = Math.min(y0, s.ay, s.by); y1 = Math.max(y1, s.ay, s.by); }
-    return { id: rd.id, segs, clear: hw + (rd.sidewalks && hw >= 1 ? SIDEWALK_EDGE : 0), x0, y0, x1, y1 };
+    return { id: rd.id, segs, hw, clear: hw + (rd.sidewalks && hw >= 1 ? SIDEWALK_EDGE : 0), x0, y0, x1, y1 };
   });
+  /* v14: true where a point lies on a wide road's paving itself (within its half width plus pad
+     of the spline; a junction's rounded corner reaches a little past the half width), whatever
+     the raster tile says; the street name posts keep off it. */
+  const onPaving = (x, z, pad) => {
+    for (const rl of roadLines) {
+      const need = rl.hw + (pad || 0);
+      if (rl.hw < 1 || x < rl.x0 - need || x > rl.x1 + need || z < rl.y0 - need || z > rl.y1 + need) continue;
+      for (const s of rl.segs) {
+        let t = ((x - s.ax) * s.dx + (z - s.ay) * s.dy); t = Math.max(0, Math.min(s.len, t));
+        if (Math.hypot(x - (s.ax + s.dx * t), z - (s.ay + s.dy * t)) < need) return true;
+      }
+    }
+    return false;
+  };
   const nearRoad = (x, z, margin, maxDh) => {
     const h0 = Number.isFinite(maxDh) ? hAt(x, z) : null;
     for (const rl of roadLines) {
@@ -1160,14 +1174,19 @@ export function buildCity(ctx) {
           }
         }
       }
-      if (!signDone) { signDone = true; if (!c.avenue) claim(tx, ty); nameSign(c, cx, cz); }
+      // v14: where the roads meet at an angle the pulled back point can land on the asphalt; the
+      // post then stays on the sidewalk corner, and a corner that is itself paved is passed over
+      if (!signDone) {
+        const back = at(Math.floor(cx), Math.floor(cz)) !== MARK.ROAD && !onPaving(cx, cz, 0.15), qx = back ? cx : px, qz = back ? cz : py;
+        if (back || !onPaving(qx, qz, 0.15)) { signDone = true; if (!c.avenue) claim(tx, ty); nameSign(c, qx, qz); }
+      }
     }
     // a crossing of lanes without sidewalks: the sign stands on the grass corner instead
     if (!signDone) for (const [sA, sB] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
       const px = c.x + c.nA[0] * sA * (c.hwA + 0.6) + c.nB[0] * sB * (c.hwB + 0.6);
       const py = c.y + c.nA[1] * sA * (c.hwA + 0.6) + c.nB[1] * sB * (c.hwB + 0.6);
       const tx = Math.floor(px), ty = Math.floor(py);
-      if (!tileOk(tx, ty, isGrass) || !claim(tx, ty)) continue;
+      if (!tileOk(tx, ty, isGrass) || nearRoad(px, py, 0.1) || !claim(tx, ty)) continue;   // v14: a grass tile the ribbon overlaps is still roadway
       signDone = true; nameSign(c, px, py); break;
     }
   }
@@ -1180,7 +1199,12 @@ export function buildCity(ctx) {
     for (const [rd, d, y] of blades) {
       const name = rd.name || rd.id || 'Street';
       const row = atlas.add(name, C.signGreen, C.white, 4.5);
-      out.signs.push({ world: true, row, w: 0.9, h: 0.2, x: sx + d[0] * 0.5, y: sy + y, z: sz + d[1] * 0.5, ry: Math.atan2(d[0], d[1]) + Math.PI / 2 });
+      // v14: two faces back to back, each 0.01 out along its own normal, so the name reads the
+      // right way round from both sides (one plane on the double sided atlas read mirrored from behind)
+      const ry = Math.atan2(d[0], d[1]) + Math.PI / 2, ox = Math.sin(ry) * 0.01, oz = Math.cos(ry) * 0.01;
+      const bx = sx + d[0] * 0.5, bz = sz + d[1] * 0.5;
+      out.signs.push({ world: true, row, w: 0.9, h: 0.2, x: bx + ox, y: sy + y, z: bz + oz, ry });
+      out.signs.push({ world: true, row, w: 0.9, h: 0.2, x: bx - ox, y: sy + y, z: bz - oz, ry: ry + Math.PI });
     }
   }
   // along every road: lamps every 8 tiles on alternating sides, other furniture between them, bus
@@ -1359,7 +1383,8 @@ export function buildCity(ctx) {
     const d0 = deck.length ? { x: deck[0].x + 0.5, z: deck[0].y + 0.5 } : at2(1, 0);
     const shoreH = hAt(sx, sz), waterOverDeck = waterY(d0.x, d0.z), deckY = Math.max(shoreH, waterOverDeck + 0.35);
     const yawAlong = Math.atan2(-dir.y, dir.x);
-    const Lp = n + 0.8;
+    // v14: the planks reach the far edge of the last deck tile (the first tile off the shore tile can be bank, so the deck tiles do not always start beside it)
+    const Lp = deck.reduce((m, t) => Math.max(m, (t.x - mr.x) * dir.x + (t.y - mr.y) * dir.y), n) + 0.8;
     const pier = gBox(Lp, 0.1, 1.0, Lp / 2 - 0.3, 0, 0); pier.rotateY(yawAlong); pier.translate(sx, deckY, sz); B.add(pier, M.wood);
     // a short plank ramp from the shore where the deck stands more than 0.25 above it
     let ramp = 0;

@@ -111,7 +111,7 @@
 
   /* ---------- the plan and the cityplan library ---------- */
   let PLAN = null, LIB = null, COLS = 0, ROWS = 0, grid = null, parent = null, queue = null;
-  let districtIdx = null, lotIdx = null, raster = null;
+  let districtIdx = null, lotIdx = null, raster = null, bridgeAxis = null;
 
   function adoptPlan(plan) {
     if (!plan || !(plan.cols > 0) || !(plan.rows > 0)) throw new Error('Thread Town: a city plan with cols and rows is required');
@@ -302,6 +302,11 @@
       // v11: `arch` (the deck's hump at mid span) and `waterway` (the waterway the deck spans)
       return { id: b.id, name: b.name || b.id, kind: b.kind || 'low', width: b.width, island: !!b.island, a: [ax, ay], b: [bx, by], axis: ax === bx ? 'y' : 'x', tiles, arch: Number.isFinite(b.arch) ? b.arch : 0, waterway: b.waterway || null };
     });
+
+    // v14: the span axis of every deck tile (1 along x, 2 along y, 0 off a deck): findPath lets
+    // a walker on or off a deck along its span only, never sideways through the railing
+    bridgeAxis = new Uint8Array(COLS * ROWS);
+    for (const b of state.bridges) for (const t of b.tiles) if (t.x >= 0 && t.y >= 0 && t.x < COLS && t.y < ROWS) bridgeAxis[t.y * COLS + t.x] = b.axis === 'x' ? 1 : 2;
 
     // 4. lots in plan order (the raster's lot index matches): departments, the cafe, the
     // clubhouse, the pond, the fillers. Stub crosswalks are painted once every stub is known so
@@ -531,8 +536,9 @@
       else if (r() < pf) { if (!blocked) set(x, y, F); }
     }
 
-    // 10. water tiles for the renderer
-    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (at(x, y) === WA) state.waterTiles.push({ x, y });
+    // 10. water tiles for the renderer (v14: and the deck tiles that stand over water, the marina
+    // planks, so the lake carries on under the dock instead of leaving a slot down to the bed)
+    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (at(x, y) === WA || (at(x, y) === DK && R.water && R.water[y * COLS + x] === 1)) state.waterTiles.push({ x, y });
   }
 
   /* Closest point on a segment and the intersection of two segments (or null). */
@@ -1002,6 +1008,8 @@
         if (n < 0 || n >= COLS * ROWS) continue;
         if ((d === 1 && cx === COLS - 1) || (d === -1 && cx === 0)) continue;
         if (parent[n] !== -2 || !walkableType(grid[n])) continue;
+        // v14: a deck is entered and left along its span (a bank tile beside a deck is across a railing)
+        if (bridgeAxis && bridgeAxis[cur] !== bridgeAxis[n]) { const ax = bridgeAxis[cur] || bridgeAxis[n]; if (ax === 1 ? (d === COLS || d === -COLS) : (d === 1 || d === -1)) continue; }
         parent[n] = cur; queue[qt++] = n;
       }
     }

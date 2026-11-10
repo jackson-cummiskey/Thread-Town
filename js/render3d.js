@@ -254,7 +254,7 @@ const SCOOT_NEAR = 35, SCOOT_FAR = 110;   // full detail and shadows inside NEAR
 const SCOOT_GLIDE = 2.5;                  // a parked scooter whose spot moved less than this glides there
 const scooterRecs = new Map();            // scooter id -> { m, id, v, x, z, yaw, n, lod, sets, placed, ridden }
 const scooterPool = [];                   // recs whose scooter left state.scooters, reused by variant
-const seenScooters = new Set();
+let scooterStamp = 0;                    // v14: one stamp per syncScooters pass, written on the recs it placed (rec.seen)
 let cinematic = false;
 let fontsReady = false;
 let rafId = 0, lastTs = 0;
@@ -268,7 +268,7 @@ const deptRecById = new Map(); // dept id -> building record
 const buildingGroupList = [];  // department groups (and station groups) for picking
 const agentRecs = new Map();   // id -> agent record, see makeAgentRec
 let agentGroupList = [];
-const seenIds = new Set();
+let agentStamp = 0;            // v14: one stamp per syncAgents pass, written on the recs it drew (rec.seen)
 let shadowMat = null;
 
 /* camera animation and follow */
@@ -350,7 +350,7 @@ let minimap = null;            // createMinimap result on the #minimap slot
 let minimapMount = null;       // the #minimap slot (hidden attribute toggled with the view)
 let hoverRec = null;           // { m, color }: the makeHoverboard mesh drawn from player.board
 const boatRecs = new Map();    // boat id -> { m, id, kind, small, far }: one makeBoat mesh per state.boats entry
-const seenBoats = new Set();
+let boatStamp = 0;             // v14: one stamp per syncBoats pass, written on the recs it placed (rec.seen)
 let boatsSynced = -1;          // frameNo of the last syncBoats, so the rider and the boat agree within a frame
 let frameNo = 0;
 let waterwayIdx = null;        // tile -> waterBodies index + 1 for the creek and channel tiles, 0 elsewhere
@@ -384,7 +384,7 @@ const WP_HERE_LEN = 2.0;                               // 'You are here' stays t
 const M_HOLD = 0.4;                                    // M held this long opens the map
 const WP_HUD_ID = 'walk-waypoint';
 let wpEl = null, wpTextEl = null, wpArrowEl = null;    // the HUD line, its text span and its arrow
-const wpState = { text: '', deg: 9999, hidden: true, hereUntil: -1 };
+const wpState = { text: '', deg: 9999, hidden: true, hereUntil: -1, m: -1, word: '', line: '' };   // m, word, line: the last directions line and what it was built from
 let mapOpenFlag = false;                               // our own view of the map (the minimap's isOpen wins when it exists)
 let mHoldAt = -1, mHoldOpened = false;                 // the M key held (wall clock ms), and whether the hold opened the map
 let boatParent = null, boatQueue = null;               // the boat route BFS scratch (allocated on first use)
@@ -393,6 +393,8 @@ const HOVER_N = VEHICLES.HOVER || {};
 const HOVER_FEET_Y = HOVER_N.FEET && isFinite(HOVER_N.FEET.y) ? HOVER_N.FEET.y : 0.07;   // the rider's feet on the deck top
 const BOAT_N = VEHICLES.BOAT || {};
 const BOAT_SEAT_DEF = { x: 0, y: 0.12, z: -0.5 };
+const BOAT_DUCK = 0.48;   // v14: how far the rider sinks into the hull under a bridge deck
+let boatDuck = 0;
 const BOAT_FAR = 110;          // beyond this the boats drop their oars, motor and tiller
 let subwayHoverUsed = false;   // the runner's hoverboard power-up seen active this run (the H hint hides)
 let closePay = 0;              // the near-miss pay shown on the 'Close!' flash
@@ -471,11 +473,25 @@ function hAt(x, z) {
 }
 /* v10 final: how far the road ribbon or sidewalk slab under a point stands above the terrain
    (roads.js surfaceLiftAt: 0.07 on a sidewalk tile, 0.03 on a road or stub mouth tile, 0.07 on
-   a bridge deck, 0 elsewhere), so walkers stand on the slab instead of inside it. */
+   a bridge deck, 0.03 on a path or cart path tile (v14), 0 elsewhere), so walkers stand on the
+   slab instead of inside it. */
 function liftAt(x, z) {
-  if (!roads || typeof roads.surfaceLiftAt !== 'function') return 0;
+  const d = dockLiftAt(x, z);
+  if (!roads || typeof roads.surfaceLiftAt !== 'function') return d;
   const v = roads.surfaceLiftAt(x, z);
-  return isFinite(v) ? v : 0;
+  return isFinite(v) && v > d ? v : d;
+}
+/* v14: the marina dock's planks (city.js: from 0.3 behind the shore tile's centre to the dock's
+   end, one tile wide, the top 0.1 over the record's y) stand over the lake bed and the bank, so
+   a walker on them stands on the plank top, not on the bed under the water. How far that top is
+   above the terrain under a point; 0 off the dock. */
+function dockLiftAt(x, z) {
+  const m = city && city.group ? city.group.userData.marina : null;
+  if (!m || !m.dir || !isFinite(m.y) || !isFinite(m.length)) return 0;
+  const dx = x - m.x, dz = z - m.z, a = dx * m.dir.x + dz * m.dir.z, b = dx * m.dir.z - dz * m.dir.x;
+  if (a < -0.3 || a > m.length - 0.3 || b < -0.5 || b > 0.5) return 0;
+  const d = m.y + 0.1 - hAt(x, z);
+  return d > 0 ? d : 0;
 }
 /* The unit normal under a world point into out (a Vector3), up when there is no terrain. */
 function nAt(x, z, out) {
@@ -639,7 +655,7 @@ function buildMaterials() {
     navy: std(NAVY, 0.70), split: std('#0E2238', 0.70),
     stone: std('#B9C4CC', 0.85), lightStone: std('#CBD3DA', 0.85), wood: std('#A5774E', 0.80), darkWood: std('#6B4A2B', 0.80),
     iron: std('#2E3E50', 0.55, 0.2), tableTop: std('#FBF8F1', 0.70),
-    cream: std('#F6E7C8', 0.90), salmonRoof: std(SALMON, 0.78), aquaDoor: std(AQUA, 0.60), skirt: std('#7FAE5B', 1.0),
+    cream: std('#F6E7C8', 0.90), salmonRoof: std(SALMON, 0.78), aquaDoor: std(AQUA, 0.60), skirt: std('#93AB71', 1.0),   // v14: the mean of the ground along the map edge
     chalk: std('#2E3E50', 0.80), flowerBox: std('#6B4A2B', 0.85),
     umbrellaS: std(SALMON, 0.85, 0, 0.25, THREE.DoubleSide), umbrellaW: std('#FFFFFF', 0.85, 0, 0.25, THREE.DoubleSide),
     jet: new THREE.MeshStandardMaterial({ color: '#DFF6F7', roughness: 0.2, transparent: true, opacity: 0.85 }),
@@ -907,11 +923,11 @@ function fitShadowBounds(light, x0, x1, z0, z1, y0, y1, pad) {
   c.near = Math.max(1, -maxZ - pad); c.far = -minZ + pad;
   c.updateProjectionMatrix();
 }
-/* v10: the near cascade follows the camera. Its bound is a square about the view focus (the
-   visitor while walking, else the orbit target) whose half width grows with the camera distance,
-   clamped to the map, quantized so the fit only moves in steps. At the overview it covers the
-   whole map (the far cascade then adds nothing new); on the ground it spends the map on the
-   surroundings. force refits regardless of the quantized state. */
+/* v10: the near cascade follows the visitor. While walking its bound is a square about the
+   visitor whose half width grows with the camera distance, clamped to the map, quantized so the
+   fit only moves in steps. At the overview it covers the whole map (the far cascade then adds
+   nothing new); on the ground it spends the map on the surroundings. force refits regardless
+   of the quantized state. */
 const _focus = new THREE.Vector3();
 function updateShadows(force) {
   if (!sun || !camera) return;
@@ -920,9 +936,12 @@ function updateShadows(force) {
   else _focus.copy(TARGET);
   const d = camera.position.distanceTo(_focus);
   const maxR = Math.hypot(COLS, ROWS) / 2 + 4;
-  let r = clamp(0.8 * d + 14, 26, maxR);
+  // v14: in the overview the bound stays on the whole map (a bound that followed the orbit target was
+  // refit on every frame of a pan, and each refit changed the texel size where the map edge clamped it)
+  const orbit = !(walkOn && player && player.pos);
+  let r = orbit ? maxR : clamp(0.8 * d + 14, 26, maxR);
   r = Math.ceil(r / 8) * 8;
-  const cx = Math.round(_focus.x / 2) * 2, cz = Math.round(_focus.z / 2) * 2;
+  const cx = orbit ? Math.round(COLS / 4) * 2 : Math.round(_focus.x / 2) * 2, cz = orbit ? Math.round(ROWS / 4) * 2 : Math.round(_focus.z / 2) * 2;
   if (!force && cx === shadowFit.cx && cz === shadowFit.cz && r === shadowFit.r) return;
   shadowFit.cx = cx; shadowFit.cz = cz; shadowFit.r = r;
   const x0 = Math.max(-1, cx - r), x1 = Math.min(COLS + 1, cx + r), z0 = Math.max(-1, cz - r), z1 = Math.min(ROWS + 1, cz + r);
@@ -1141,7 +1160,28 @@ function skirtGeometry() {
   const nrm = new Float32Array(pos.length);
   for (let k = 1; k < nrm.length; k += 3) nrm[k] = 1;
   g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  // v14: world space uvs (x, z over the grass layer's repeat), the way the ground samples its layers
+  const uv = new Float32Array(pos.length / 3 * 2);
+  for (let k = 0, u = 0; k < pos.length; k += 3, u += 2) { uv[u] = pos[k] / SKIRT_REPEAT; uv[u + 1] = pos[k + 2] / SKIRT_REPEAT; }
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   return g;
+}
+/* v14: the skirt wears the ground's own grass layer under a colour that brings the product to the
+   material's colour (the mean of the ground along the map edge), so the edge reads as more grass with
+   the same grain and not as a line. Without the blended ground the flat colour stays. */
+const SKIRT_REPEAT = 4;   // world units per repeat of the grass layer (js/ground.js GROUND.repeat[0])
+function textureSkirt(mat) {
+  const tex = ground && ground.textures && ground.textures.layers ? ground.textures.layers[0] : null;
+  const data = tex && tex.image ? tex.image.data : null;
+  if (!data || !data.length || mat.map) return;
+  const lin = new Float32Array(256);
+  for (let v = 0; v < 256; v++) { const c = v / 255; lin[v] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+  let r = 0, g = 0, b = 0;
+  for (let i = 0; i < data.length; i += 4) { r += lin[data[i]]; g += lin[data[i + 1]]; b += lin[data[i + 2]]; }
+  const n = data.length / 4;
+  if (!(r > 0 && g > 0 && b > 0)) return;
+  mat.color.setRGB(mat.color.r * n / r, mat.color.g * n / g, mat.color.b * n / b);
+  mat.map = tex; mat.needsUpdate = true;
 }
 /* ---------- ground (v10: js/ground.js) ----------
    The painted tile texture, the lane markings, curbs, crosswalk zebras, bridge planks and the
@@ -1168,6 +1208,7 @@ function buildGround() {
     scene.add(ground.mesh);
     ground.setNight(nightS);
   }
+  if (ground) textureSkirt(M.skirt);
   const skirt = new THREE.Mesh(skirtGeometry(), M.skirt);
   skirt.name = 'skirt';
   // No shadows on the skirt: the far cascade draws long streaks across it at grazing angles.
@@ -2728,7 +2769,7 @@ function makeAgentRec(a) {
   if (!a.moveDir) a.moveDir = { x: 0, z: 1 };
   const rec = { agent: a, handle, shadow, tag: makeOverlayEl('tag'), bubble: makeOverlayEl('bubble'),
     bubbleText: null, bubbleKind: null, tagOn: false, bubbleOn: false, lastX: a.pos.x, lastZ: a.pos.y, tx: -1e9, ty: -1e9, bx: -1e9, by: -1e9,
-    work: null, propKind: null, faded: false,
+    work: null, propKind: null, faded: false, seen: 0,
     // v10: the rendered group's last x and z (the foot plant distance clock, see syncAgents)
     gx: NaN, gz: NaN,
     // per-kind function slots (CONTRACT_V3): animateAlien or animateAnimal and so on
@@ -2964,9 +3005,10 @@ function pushFarAgent(rec, a) {
   farAgent.body.setMatrixAt(k, g.matrix); farAgent.body.setColorAt(k, _c);
   farAgent.head.setMatrixAt(k, g.matrix); farAgent.head.setColorAt(k, _c);
 }
+const FAR_AGENT_KEYS = ['body', 'head'];
 function finishFarAgents() {
-  for (const k of ['body', 'head']) {
-    const im = farAgent[k];
+  for (let i = 0; i < FAR_AGENT_KEYS.length; i++) {
+    const im = farAgent[FAR_AGENT_KEYS[i]];
     if (!im) continue;
     im.count = farAgent.count; im.instanceMatrix.needsUpdate = true;
     if (im.instanceColor) im.instanceColor.needsUpdate = true;
@@ -2991,7 +3033,7 @@ function advanceDistance(h, rec, x, z) {
 function syncAgents(dt, time) {
   const st = TT.state, show = st.settings.showDemo;
   const sel = st.selected, hov = st.hover;
-  seenIds.clear();
+  const stamp = ++agentStamp;
   farAgent.count = 0;
   ensureFarAgents(st.agents.length);
   const camP = camera ? camera.position : null;
@@ -2999,9 +3041,9 @@ function syncAgents(dt, time) {
   for (const a of st.agents) {
     const vis = show || !a.spec.demo;
     if (!vis) { const r0 = agentRecs.get(a.id); if (r0) removeAgentRec(r0); continue; }
-    seenIds.add(a.id);
     let rec = agentRecs.get(a.id);
     if (!rec) rec = makeAgentRec(a);
+    rec.seen = stamp;
     const h = rec.handle, g = h.group;
     const isSel = !!(sel && sel.kind === 'agent' && sel.id === a.id), isHov = !!(hov && hov.kind === 'agent' && hov.id === a.id);
     // Hover pause: set on the hovered agent only; every other agent is cleared. CONTRACT_V4 adds the
@@ -3089,7 +3131,7 @@ function syncAgents(dt, time) {
   }
   finishFarAgents();
   // deleting from a Map during for-of iteration is safe, so no snapshot copy is needed
-  for (const rec of agentRecs.values()) if (!seenIds.has(rec.agent.id)) removeAgentRec(rec);
+  for (const rec of agentRecs.values()) if (rec.seen !== stamp) removeAgentRec(rec);
 }
 
 /* HTML tags and bubbles project from the rendered group position, so they follow swings, rooftops and dives. */
@@ -3570,6 +3612,8 @@ function syncPlayerGround(p) {
   const E = p.exiting;
   if (E && E.to && isFinite(E.to.x) && isFinite(E.to.z)) E.to.y = hAt(E.to.x, E.to.z);
   p.floorY = (p.state === 'station' || E) ? 0 : hAt(p.pos.x, p.pos.y);
+  // v14: on foot or on a scooter on the marina dock the chase camera follows the plank top, not the lake bed
+  if (!E && (p.state === 'idle' || p.state === 'route' || p.state === 'scooter')) p.floorY += dockLiftAt(p.pos.x, p.pos.y);
 }
 function syncPlayer(dt, time) {
   if (!walkOn || !player || !playerRec) return;
@@ -3610,7 +3654,9 @@ function syncPlayer(dt, time) {
     // idle on the pier planks (the land half of the pier tile, or right after the climb): stand at
     // deck height. deckY excludes the hop lift, which the animator already applies through yoff.
     // Inside a room the floor is the room's floorY (v5).
-    if (where === null) g.position.y = floorY + (isFinite(p.deckY) ? p.deckY : 0) + (p.interior ? 0 : liftAt(p.pos.x, p.pos.y));   // v10 final: the ribbon or slab lift outdoors
+    // v10 final: the ribbon or slab lift outdoors; v14: deckY is the plank top itself, and outdoors the
+    // body stands on the terrain plus the lift (floorY also carries the marina dock for the camera)
+    if (where === null) g.position.y = p.interior ? floorY : (p.deckY > 0 ? p.deckY : hAt(p.pos.x, p.pos.y) + liftAt(p.pos.x, p.pos.y));
     // the station walk-out (v5): the body eases from the anchor height down to the ground
     const E = p.exiting;
     if (E && E.from && E.to && isFinite(E.t)) {
@@ -3670,6 +3716,14 @@ function syncPlayer(dt, time) {
 
   pr.animate(h, p, time, dt, pose);
   if (L) animateLeisure(h, p, time, dt);
+  // v14: the swimmer floats at its own water (animateLeisure writes the pond's level, 0)
+  if (swimming && L && !p.interior && (L.phase === 'wading' || L.phase === 'swimming' || L.phase === 'leaving')) {
+    const wa = TT.sim.at(Math.floor(p.pos.x), Math.floor(p.pos.y)) === TT.sim.TILES.WA;
+    const lvl = waterLevelAt(p.pos.x, p.pos.y) - 0.04;
+    if (wa) g.position.y += Math.min(Math.max(floorY, lvl), lvl + 0.2);
+    else if (L.phase === 'swimming') g.position.y += (isFinite(L.surface) ? L.surface - 0.04 : lvl);   // under a bridge deck: the level of the water the swimmer came from
+    else g.position.y = floorY + liftAt(p.pos.x, p.pos.y);              // wading on the bank: on the ground
+  }
   if (h.parts && h.parts.ring) h.parts.ring.visible = false;
 
   // v6: the subway prompt in the enter zone, the walk-in down the stairs, and the golf round record
@@ -3683,7 +3737,7 @@ function syncPlayer(dt, time) {
   // the cart, in a boat or hovering over water (v11)
   const hop = p.yoff ? clamp(-p.yoff / 3, 0, 1) : 0;
   const sh = ALIEN_SCALE * (1 - 0.15 * hop);
-  const groundY = (p.interior ? floorY : hAt(g.position.x, g.position.z) + liftAt(g.position.x, g.position.z)) + (p.deckY || 0);
+  const groundY = p.interior ? floorY : (p.deckY > 0 ? p.deckY : hAt(g.position.x, g.position.z) + liftAt(g.position.x, g.position.z));
   const overWater = !!hov && isFinite(hov.surface) && isFinite(hov.ground) && hov.surface > hov.ground + 0.02;
   pr.shadow.visible = !swimming && !inCart && !inBoat && !overWater && g.position.y - groundY < 2.0;
   if (pr.shadow.visible) {
@@ -3847,7 +3901,7 @@ function endAgentRide(rec) {
 function placePlayerRider(g, s, p) {
   const x = isFinite(s.x) ? s.x : p.pos.x, z = isFinite(s.z) ? s.z : p.pos.y;
   const yaw = isFinite(s.yaw) ? s.yaw : (isFinite(p.bodyYaw) ? p.bodyYaw : 0);
-  g.position.set(x + Math.sin(yaw) * SCOOT_FEET_Z, hAt(x, z) + SCOOT_DECK, z + Math.cos(yaw) * SCOOT_FEET_Z);
+  g.position.set(x + Math.sin(yaw) * SCOOT_FEET_Z, hAt(x, z) + dockLiftAt(x, z) + SCOOT_DECK, z + Math.cos(yaw) * SCOOT_FEET_Z);
   g.rotation.set(0, yaw, 0);
 }
 /* The detail levels of one scooter: everything near, the deck, stem, bar and tyres in the middle
@@ -3948,7 +4002,7 @@ function makeScooterRec(v) {
   if (!m || !m.group || !m.parts) return null;
   m.group.userData.scooter = true;
   registerGroupMaterials(m.group);
-  const rec = { m, id: null, v, x: 0, z: 0, yaw: 0, n: new THREE.Vector3(0, 1, 0), lod: -1, sets: scooterLodSets(m), placed: false, ridden: false };
+  const rec = { m, id: null, v, x: 0, z: 0, yaw: 0, n: new THREE.Vector3(0, 1, 0), lod: -1, sets: scooterLodSets(m), placed: false, ridden: false, seen: 0 };
   if (!farScoot.parts) { try { buildFarScooterRig(rec); } catch (e) { console.warn('Thread Town: the far scooter rig failed to build', e); farScoot.parts = null; } }
   return rec;
 }
@@ -3979,15 +4033,15 @@ function syncScooters(dt) {
   const pS = walkOn && player && player.state === 'scooter' && player.scooter && typeof player.scooter === 'object' ? player.scooter : null;
   const kT = dt > 0 ? 1 - Math.exp(-CART_TILT_RATE * dt) : 1;
   const cam = camera ? camera.position : null;
-  seenScooters.clear();
+  const stamp = ++scooterStamp;
   farScoot.count = 0;
   const farOk = !!farScoot.parts && ensureFarScooters(list.length);
   for (let i = 0; i < list.length; i++) {
     const s = list[i];
-    if (!s || !s.id || seenScooters.has(s.id)) continue;
-    seenScooters.add(s.id);
+    if (!s || !s.id) continue;
     const rec = scooterRecs.get(s.id) || acquireScooterRec(s);
-    if (!rec) continue;
+    if (!rec || rec.seen === stamp) continue;   // no mesh, or a second entry with the same id
+    rec.seen = stamp;
     const m = rec.m, g = m.group;
     let x = s.x, z = s.y, yaw = s.yaw, speed = 0, steer = 0, ridden = !!s.rider, follow = false;
     if (pS && pS.id === s.id) {
@@ -4021,7 +4075,7 @@ function syncScooters(dt) {
       }
     }
     rec.x = x; rec.z = z; rec.yaw = wrapAngle(yaw); rec.placed = true; rec.ridden = ridden;
-    g.position.set(x, hAt(x, z), z);
+    g.position.set(x, hAt(x, z) + dockLiftAt(x, z), z);   // v14: on the marina dock's planks
     // pitch and roll from the terrain normal, eased like the cart's
     nAt(x, z, _n);
     rec.n.lerp(_n, kT);
@@ -4044,7 +4098,7 @@ function syncScooters(dt) {
     if (level === 2 && farOk) { g.visible = false; pushFarScooter(rec); }
   }
   finishFarScooters();
-  for (const rec of scooterRecs.values()) if (!seenScooters.has(rec.id)) releaseScooterRec(rec);
+  for (const rec of scooterRecs.values()) if (rec.seen !== stamp) releaseScooterRec(rec);
 }
 /* Headless counts for the checks: scooters in the sim, meshes drawn for them, parked cars in the scene. */
 function scooterCounts() {
@@ -4215,7 +4269,7 @@ function makeBoatRec(b) {
   registerGroupMaterials(m.group);
   const small = [];
   for (const o of dyn) small.push(o);
-  const rec = { m, id: b.id, kind, small, far: false };
+  const rec = { m, id: b.id, kind, small, far: false, seen: 0 };
   m.group.visible = true;
   scene.add(m.group);
   boatRecs.set(b.id, rec);
@@ -4233,16 +4287,17 @@ function syncBoats(dt) {
   const p = walkOn ? player : null;
   const pB = p && p.state === 'boat' && p.boat && typeof p.boat === 'object' ? p.boat : null;
   const cam = camera ? camera.position : null;
-  seenBoats.clear();
+  const stamp = ++boatStamp;
   for (let i = 0; i < list.length; i++) {
     const b = list[i];
-    if (!b || !b.id || seenBoats.has(b.id)) continue;
-    seenBoats.add(b.id);
+    if (!b || !b.id) continue;
     const kind = b.kind === 'rowboat' ? 'rowboat' : 'launch';
     let rec = boatRecs.get(b.id);
+    if (rec && rec.seen === stamp) continue;   // a second entry with the same id
     if (rec && rec.kind !== kind) { releaseBoatRec(rec); rec = null; }
     if (!rec) rec = makeBoatRec(b);
     if (!rec) continue;
+    rec.seen = stamp;
     const m = rec.m, g = m.group;
     const ridden = !!(pB && pB.id === b.id);
     let x = b.x, z = b.y, yaw, speed = 0, steer = 0, wake = false, y = NaN;
@@ -4260,7 +4315,7 @@ function syncBoats(dt) {
     if (far !== rec.far) { rec.far = far; for (const o of rec.small) o.visible = !far; }
     g.updateMatrixWorld(true);
   }
-  for (const rec of boatRecs.values()) if (!seenBoats.has(rec.id)) releaseBoatRec(rec);
+  for (const rec of boatRecs.values()) if (rec.seen !== stamp) releaseBoatRec(rec);
 }
 /* The visitor in a boat: on the kind's seat anchor in the hull frame, turning, pitching and rolling with it. */
 function placePlayerInBoat(g, rec) {
@@ -4270,6 +4325,16 @@ function placePlayerInBoat(g, rec) {
   rec.m.hull.localToWorld(_v);
   g.position.copy(_v);
   rec.m.hull.getWorldQuaternion(g.quaternion);
+  // v14: duck under a bridge deck (the rider's head stands 0.4 above the deck's underside)
+  const S = TT.sim, BR = S && S.TILES ? S.TILES.BR : undefined;
+  let under = 0;
+  if (S && typeof S.at === 'function' && BR !== undefined) {
+    const x = g.position.x, z = g.position.z;
+    if (S.at(Math.floor(x), Math.floor(z)) === BR || S.at(Math.floor(x + 0.9), Math.floor(z)) === BR || S.at(Math.floor(x - 0.9), Math.floor(z)) === BR
+      || S.at(Math.floor(x), Math.floor(z + 0.9)) === BR || S.at(Math.floor(x), Math.floor(z - 0.9)) === BR) under = 1;
+  }
+  boatDuck += (under - boatDuck) * 0.2;
+  if (boatDuck > 0.001) g.position.y -= boatDuck * BOAT_DUCK;
 }
 /* Headless counts for the checks. */
 function boatCounts() {
@@ -4516,7 +4581,9 @@ function computeRoute(p, time) {
     const t = nearestOkTile(tx, tz, boatWaterTile);
     if (s && t) { const ttx = t.x, ttz = t.z; routeOk = boatRoute(sx, sz, ttx, ttz); routeToPin = ttx === tx && ttz === tz; }
   } else if (typeof S.findPath === 'function') {
-    const s = nearestOkTile(routeTileX, routeTileZ, simWalkableAt);
+    // v14: the path starts on a tile joined to the town's walkable area, with a clear straight leg from the visitor
+    const spn = TT.state.spawn, px0 = p.pos.x, pz0 = p.pos.y, vtx = routeTileX, vtz = routeTileZ;
+    const s = nearestOkTile(routeTileX, routeTileZ, (x, y) => simWalkableAt(x, y) && ((x === vtx && y === vtz) || straightLegOK(px0, pz0, x + 0.5, y + 0.5)) && (!spn || (x === spn.x && y === spn.y) || !!S.findPath(x, y, spn.x, spn.y)));
     const sx = s ? s.x : -1, sz = s ? s.z : -1;
     let path = null, toPin = false;
     if (s) {
@@ -4543,6 +4610,7 @@ function computeRoute(p, time) {
       }
     }
     if (path) {
+      if (s && (sx !== routeTileX || sz !== routeTileZ)) pushRoutePt(sx + 0.5, sz + 0.5);   // v14: the lead in to the start tile
       for (let i = 0; i < path.length; i++) pushRoutePt(path[i].x + 0.5, path[i].y + 0.5);
       routeOk = true; routeToPin = toPin;
     }
@@ -4651,7 +4719,10 @@ function updateWaypointHud(p, time) {
     let a = Math.atan2(ax - p.pos.x, az - p.pos.y) - heading;
     a = Math.atan2(Math.sin(a), Math.cos(a));    // wrapped to (-pi, pi]
     const m = Math.max(1, Math.round(dist * M_PER_TILE));
-    text = 'Waypoint: ' + m + ' m, ' + bearingWord(a);
+    const word = bearingWord(a);
+    // v14: the line is rebuilt only when the metres or the bearing word change, not on every frame
+    if (m !== wpState.m || word !== wpState.word) { wpState.m = m; wpState.word = word; wpState.line = 'Waypoint: ' + m + ' m, ' + word; }
+    text = wpState.line;
     deg = Math.round(-a * 180 / Math.PI / 5) * 5;   // left turns counterclockwise on screen
     show = true;
   } else if (wpState.hereUntil >= 0 && walkOn) {
@@ -4925,7 +4996,8 @@ function setHudVisible(on) {
   if (pe && !on) { pe.hidden = true; promptKey = ''; promptFade.shown = false; promptFade.armed = false; promptFade.hideAt = -1; if (pe.style) pe.style.opacity = ''; }
   if (!on) resetV5Hud();
   if (!on) { if (hoverRec) hoverRec.m.group.visible = false; if (minimapMount) minimapMount.hidden = true; }   // v11
-  if (!on) {   // v13: the map closes, the waypoint and the HUD line go with walk mode
+  if (!on) {   // v13: the map closes, the waypoint and the HUD line go with walk mode (v14: and the plaque note)
+    if (statue && statue.isOpen()) statue.close();
     closeMap(); clearWaypoint(true); wpState.hereUntil = -1; mHoldAt = -1; mHoldOpened = false;
     if (wpEl) { wpState.hidden = true; wpEl.hidden = true; if (wpEl.style) wpEl.style.display = 'none'; }
   }
@@ -5834,7 +5906,8 @@ function applyZoomLimits() {
   if (!controls) return;
   const free = camMode === 'free';
   controls.minDistance = free ? 0.5 : MIN_ZOOM * fitDistance;
-  controls.maxDistance = free ? 4000 : MAX_ZOOM * fitDistance;
+  // v14: never past the far plane less the map diagonal, so zooming out cannot clip the town away (the fit caps at 500)
+  controls.maxDistance = free ? 4000 : Math.min(MAX_ZOOM * fitDistance, camera.far - Math.hypot(COLS, ROWS));
 }
 function applyCameraMode() {
   if (!controls) return;
@@ -5917,6 +5990,15 @@ function typingInField() {
   const el = document.activeElement;
   return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
 }
+const UI_MODAL_IDS = ['modal', 'walk-modal', 'leaderboard-modal'];
+function uiModalOpen() {
+  if (typeof document.getElementById !== 'function') return false;
+  for (let i = 0; i < UI_MODAL_IDS.length; i++) {
+    const el = document.getElementById(UI_MODAL_IDS[i]);
+    if (el && el.classList && el.classList.contains('open')) return true;
+  }
+  return false;
+}
 function bindKeys() {
   if (keysBound) return; keysBound = true;
   // v8: ui.js toggles walk mode on Tab (a document listener). While a cart exists, Tab is the cart's
@@ -5951,13 +6033,15 @@ function bindKeys() {
     if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation(); else ev.stopPropagation();
   }, true);
   window.addEventListener('keydown', ev => {
-    if (typingInField()) return;
     const k = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
+    // v14: the plaque note owns the keys wherever the focus sits (a header select reached with Tab included); E or Enter closes it
+    if (plaqueOpen()) { clearWalkKeys(); if ((k === 'e' || k === 'Enter') && !ev.repeat) { statue.close(); ev.preventDefault(); } return; }
+    if (typingInField()) return;
     // v11: the shop modal owns the keys wherever it opened from (the kiosk, the header, the
     // runner card); Esc closed it in the capture listener above, nothing else reaches the game
     if (shopOpen()) { clearSubKeys(); clearWalkKeys(); return; }
-    // v14: the plaque note owns the keys; E or Enter closes it
-    if (plaqueOpen()) { clearWalkKeys(); if ((k === 'e' || k === 'Enter') && !ev.repeat) { statue.close(); ev.preventDefault(); } return; }
+    // v14: the page's own modals (add agent, the picker, the leaderboard) own the keys too; ui.js closes them on Esc
+    if (uiModalOpen()) { clearWalkKeys(); return; }
     // v13: the open town map owns the keys: G goes, M closes, the walk keys stay muted
     if (mapOpenNow()) {
       clearWalkKeys();

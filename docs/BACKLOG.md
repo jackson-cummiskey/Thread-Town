@@ -40,6 +40,20 @@ Original v11 scope (built):
 - v13 map (docs/CONTRACT_V13.md): the corner minimap opens into a labelled town map (Shift+M, the expand glyph, the phone Map button); tap sets a waypoint, the route follows the sim's paths and shows on both maps, the HUD gives distance and bearing, Go walks you there.
 - Still humped: the creek mouth cart bridge and the marina footbridge (about 0.3 per tile) because their paths turn at the banks.
 
+## Built 2026-11-10: v14, the founder's statue and the final sweep (docs/CONTRACT_V14.md)
+
+- The founder's statue on the plaza (js/statue.js): a gold figure, a plaque, and a note opened with E.
+- Sweep fixes: bridge decks are solid from every side and from below; cart bridges are plank decks; no sidewalks across the creek road bridge; the gap at the west end of the River Street bridge is closed; agents no longer cross railings; walkers, scooters and the hoverboard stand on the marina planks; the swimmer floats at each water body's own level and can swim under bridges; Go works from the island; modals no longer leak walk keys or exit walk mode on Esc; zoom out stops before the far plane; the ground past the map edge wears the grass texture; the island has a rock ring; js/legacy is deleted.
+- By hand after the sweep: low road bridges wear a 0.22 slab so a boat's hull clears them, and the boat rider ducks under every deck.
+- Known and left alone (each needs a redesign, not a patch):
+  - The marina footbridge (channel-footbridge) still humps: 0.154 per quarter tile against a 0.12 target. Its span cannot grow without covering the marina shore tile.
+  - Path ribbons meet the one and two wide decks off centre where a spline path turns at the bank.
+  - Boat water where the ground stands above the water: 16 river tiles along the bluff wall, 28 around the island, 3 under the marina kicker.
+  - Stepping onto a deck from the water's edge pops the body up to 1.1 in one frame; climbing out pops 0.7 to 1.2.
+  - The hoverboard treats the world as one layer per tile: it cannot pass under a deck.
+  - The directions pill truncates four digit distances on 360 to 375 px phones.
+  - validatePlan has no checks for plan.statue.
+
 ## Built 2026-11-05: v12 phone (docs/CONTRACT_V12.md)
 
 Touch layer (js/touch.js: joystick, buttons per mode, look drag, pinch, runner swipes), orbit camera and the Phone quality tier by default on coarse-pointer devices, phone layouts (collapsed header with a Menu button, 120 px minimap above the buttons). Laptop path verified identical. Checked in the browser pane at 375 by 812: no console errors, no horizontal scroll, buttons E, View, Map, Jump in walk mode.

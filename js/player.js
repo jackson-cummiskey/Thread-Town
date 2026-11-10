@@ -552,6 +552,7 @@ export function createPlayer(ctx) {
      rectangle; for walkers that rectangle carries the deck over the water. */
   function pointOK(px, pz, mayWater, swim) {
     const v = at(Math.floor(px), Math.floor(pz));
+    if (swim && v === BR && underDeck(Math.floor(px), Math.floor(pz))) return mayWater;   // v14: under a deck
     if (land(v)) return !swim || !cliffFromWater(px, pz);   // v12.1: no climbing out up a cliff
     if (v === T.WA) return inPierRect(px, pz) ? !swim : mayWater;
     return false;
@@ -569,6 +570,9 @@ export function createPlayer(ctx) {
       + (pointOK(x - RADIUS, z + RADIUS, mayWater, swim) ? 0 : 1) + (pointOK(x + RADIUS, z + RADIUS, mayWater, swim) ? 0 : 1);
   }
   const waterAt = (px, pz) => at(Math.floor(px), Math.floor(pz)) === T.WA && !inPierRect(px, pz);
+  // v14: the water under a bridge deck (a bridge tile on the boat mask) is open to a swimmer, who passes under the deck.
+  // Only in the swimming phase: a wader or a swimmer climbing out (wading, leaving) keeps the deck as land, as before.
+  const underDeck = (tx, tz) => { if (SWIM_L.phase !== 'swimming' || player.leisure !== SWIM_L || at(tx, tz) !== BR) return false; if (!waterMapsBuilt) buildWaterMaps(); return !!boatMask && boatMask[tz * COLS + tx] === 1; };
   function anyPointWater(x, z) {
     return waterAt(x - RADIUS, z - RADIUS) || waterAt(x + RADIUS, z - RADIUS) || waterAt(x - RADIUS, z + RADIUS) || waterAt(x + RADIUS, z + RADIUS);
   }
@@ -612,7 +616,7 @@ export function createPlayer(ctx) {
      the water the swimmer is in (the gorge walls under the bluff, the island's rock collar). */
   function cliffFromWater(px, pz) {
     const s = SWIM_L.surface;
-    return finite(s) && cartHeight(px, pz) - s > WADE_DROP;
+    return finite(s) && cartHeight(Math.floor(px) + 0.5, Math.floor(pz) + 0.5) - s > WADE_DROP;   // v14: the tile centre, the height the wade in rule uses
   }
   /* Interior collision: the room rectangle inset by the radius and the furniture AABBs. */
   function roomOK(room, x, z) {
@@ -679,6 +683,7 @@ export function createPlayer(ctx) {
   function swimFloat() {
     const s = finite(SWIM_L.surface) ? SWIM_L.surface : waterLevel(player.pos.x, player.pos.y);
     const g = cartHeight(player.pos.x, player.pos.y);
+    if (underDeck(Math.floor(player.pos.x), Math.floor(player.pos.y))) return s - g + SWIM_DEPTH;   // v14: under a deck, at the water
     return Math.max(SWIM_DEPTH, s - g + SWIM_DEPTH);
   }
   function beginSwimPhase(phase, time) {
@@ -1129,11 +1134,24 @@ export function createPlayer(ctx) {
   function planWalkWay(x0, z0, x1, z1) {
     walkWay.length = 0;
     if (straightWalkOK(x0, z0, x1, z1) || !sim || typeof sim.findPath !== 'function') return;
-    const sx = Math.floor(x0), sz = Math.floor(z0), tx = Math.floor(x1), tz = Math.floor(z1);
+    let sx = Math.floor(x0), sz = Math.floor(z0), lead = false;
+    const tx = Math.floor(x1), tz = Math.floor(z1);
+    const ok = typeof sim.walkable === 'function' ? sim.walkable : null;
+    // v14: a start tile the sim does not walk (a tee box, the fairway, a green) is swapped for the nearest
+    // one it does that has a clear straight walk from here and joins the town's walkable area
+    if (ok && !ok(sx, sz)) {
+      const spn = state.spawn, ox = sx, oz = sz;
+      search: for (let r = 1; r <= 10; r++) for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+        const cx = ox + dx, cz = oz + dz;
+        if (!ok(cx, cz) || !straightWalkOK(x0, z0, cx + 0.5, cz + 0.5)) continue;
+        if (spn && finite(spn.x) && finite(spn.y) && !(cx === spn.x && cz === spn.y) && !sim.findPath(cx, cz, spn.x, spn.y)) continue;
+        sx = cx; sz = cz; lead = true; break search;
+      }
+    }
     let path = sim.findPath(sx, sz, tx, tz), viaTile = !!path;
     // greens, sand and tee boxes are not agent tiles: path to the nearest tile the sim walks that
     // has a clear straight walk onto the target (the island: the north end of the footbridge)
-    const ok = typeof sim.walkable === 'function' ? sim.walkable : null;
     for (let r = 1; !path && r <= 10; r++) {
       let best = null, bd = Infinity;
       for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
@@ -1147,8 +1165,9 @@ export function createPlayer(ctx) {
       path = best;
     }
     if (!path) return;
+    if (lead) walkWay.push({ x: sx + 0.5, z: sz + 0.5 });   // v14: the lead in to the start tile
     for (let i = 0; i < path.length; i++) walkWay.push({ x: path[i].x + 0.5, z: path[i].y + 0.5 });
-    if (viaTile && walkWay.length) walkWay.pop();   // the target tile itself: the last leg goes to the exact spot
+    if (viaTile && path.length) walkWay.pop();   // the target tile itself: the last leg goes to the exact spot (v14: never the lead in)
   }
   /* Drops leading waypoints the walker can already reach in a straight line (string pulling). */
   function trimWalkWay(px, pz) {
@@ -2492,11 +2511,25 @@ export function createPlayer(ctx) {
     for (let i = 0; i < waterBodies.length; i++) { const b = waterBodies[i]; if (pointInPoly(cx, cz, b.pts) || pointInPoly(x, z, b.pts)) return b.surface; }
     return cartHeight(x, z) + 0.3;
   }
+  /* v14: the marina dock's plank top by city.js's rule: the shore tile's ground, or the water under
+     the first deck tile plus 0.35 when that is higher, plus the 0.1 plank. The deck tiles' own
+     terrain is the lake bed, under the water. */
+  let dockTopY = NaN;
+  function dockTop() {
+    if (finite(dockTopY)) return dockTopY;
+    const m = state.marina;
+    if (!m || !m.pos || !m.deck || !m.deck.length || !terrain || typeof terrain.heightAt !== 'function') return -Infinity;
+    const top = Math.max(cartHeight(m.pos.x, m.pos.y), waterLevel(m.deck[0].x + 0.5, m.deck[0].y + 0.5) + 0.35) + 0.1;
+    if (finite(top)) dockTopY = top;
+    return finite(top) ? top : -Infinity;
+  }
   /* The surface a hovering board rides over: the terrain (bridge decks and the shaped ground come
-     from heightAt), the pier planks over the water, else the water level over a water tile. */
+     from heightAt), the pier planks and the marina dock over the water, else the water level over
+     a water tile. */
   function surfaceAt(x, z) {
     const g = cartHeight(x, z);
     const v = at(Math.floor(x), Math.floor(z));
+    if (v === DK) { const d = dockTop(); return d > g ? d : g; }   // v14: the marina dock's planks stand over the lake bed, like the pier's
     if (v !== T.WA) return g;
     if (inPierRect(x, z)) { const pier = state.pier; return Math.max(g, pier && finite(pier.height) ? pier.height : 0.5); }
     const w = waterLevel(x, z);
@@ -2704,7 +2737,7 @@ export function createPlayer(ctx) {
         }
         ok = finite(h.x) && finite(h.z) && finite(h.y) && finite(h.yaw) && finite(h.speed) && finite(h.steer) && finite(h.lean) && finite(h.vx) && finite(h.vz) && finite(h.vy)
           && finite(h.boostT) && finite(h.chargeT) && h.speed >= -0.01 && h.speed <= HOVER_BOOST + 0.5 && Math.abs(h.lean) <= HOVER_LEAN_MAX + 0.01
-          && Math.hypot(h.x - x0, h.z - z0) <= HOVER_BOOST * dt + 0.05 && Math.abs(h.y - y0) <= 30 * dt + 0.05 && hoverFitsRel(h.x, h.z);
+          && Math.hypot(h.x - x0, h.z - z0) <= HOVER_BOOST * dt + 0.05 && (Math.abs(h.y - y0) <= 30 * dt + 0.05 || Math.abs(h.y - (surfaceAt(h.x, h.z) + HOVER_H)) <= 0.05) && hoverFitsRel(h.x, h.z);   // v14: a step up onto a deck or a ledge lands on the surface, it is not a teleport
       } catch (e) { ok = false; }
       if (ok) {
         done = true;
@@ -2742,6 +2775,12 @@ export function createPlayer(ctx) {
     if (!kickerList) buildKickers();
     const h = HOVER;
     h.x = player.pos.x; h.z = player.pos.y;      // a tight spot (a wall beside the walker) is left by the relative fit rule
+    // v14: the board (0.35) is wider than the walker (0.28): pull it inside the walker's own tile when a corner hangs into a blocked one
+    if (hoverBad(h.x, h.z) > 0 && hoverPointOK(h.x, h.z)) {
+      const tx0 = Math.floor(h.x), tz0 = Math.floor(h.z), e0 = HOVER_R + 1e-3;
+      const cx0 = clamp(h.x, tx0 + e0, tx0 + 1 - e0), cz0 = clamp(h.z, tz0 + e0, tz0 + 1 - e0);
+      if (hoverBad(cx0, h.z) === 0) h.x = cx0; else if (hoverBad(h.x, cz0) === 0) h.z = cz0; else { h.x = cx0; h.z = cz0; }
+    }
     h.yaw = finite(player.yaw) ? wrap(player.yaw) : Math.PI;
     h.vx = 0; h.vz = 0; h.vy = 0; h.speed = 0; h.steer = 0; h.lean = 0; h.airborne = false; h.bounced = false; h.kickArmed = false; h.dip = 0; h.dipT = -Infinity;
     h.boostT = 0; h.chargeT = 0; h.boosting = false; h.hint = null;
@@ -3871,7 +3910,8 @@ export function createPlayer(ctx) {
     } else {
       // free movement: walk, run, pier, wade, swim
       const wet = inWater();
-      if (wet) SWIM_L.surface = waterLevel(player.pos.x, player.pos.y);   // v12.1: the body's level, pond or lake or river or creek
+      // v12.1: the body's level, pond or lake or river or creek (v14: held under a deck, where the lookup can miss the water body)
+      if (wet && !underDeck(Math.floor(player.pos.x), Math.floor(player.pos.y))) SWIM_L.surface = waterLevel(player.pos.x, player.pos.y);
       const top = wet ? SPEED_SWIM : player.onDeck ? SPEED_PIER : (inp.run ? SPEED_RUN : SPEED_WALK);
       integrateVelocity(top, dt, moving);
 
@@ -3890,7 +3930,7 @@ export function createPlayer(ctx) {
       if (!finite(player.pos.x)) player.pos.x = x0; if (!finite(player.pos.y)) player.pos.y = z0;
 
       const px = player.pos.x, pz = player.pos.y;
-      const centerTile = at(Math.floor(px), Math.floor(pz));
+      const centerTile = (wet && underDeck(Math.floor(px), Math.floor(pz))) ? T.WA : at(Math.floor(px), Math.floor(pz));   // v14: under a deck the swimmer is in the water
       const sp = Math.hypot(vel.x, vel.z);
       player.speed = sp;
       if (sp > 0.05) setMoveDir(vel.x, vel.z);
