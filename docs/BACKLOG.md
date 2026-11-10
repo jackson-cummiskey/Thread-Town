@@ -45,6 +45,11 @@ Original v11 scope (built):
 - The founder's statue on the plaza (js/statue.js): a gold figure, a plaque, and a note opened with E.
 - Sweep fixes: bridge decks are solid from every side and from below; cart bridges are plank decks; no sidewalks across the creek road bridge; the gap at the west end of the River Street bridge is closed; agents no longer cross railings; walkers, scooters and the hoverboard stand on the marina planks; the swimmer floats at each water body's own level and can swim under bridges; Go works from the island; modals no longer leak walk keys or exit walk mode on Esc; zoom out stops before the far plane; the ground past the map edge wears the grass texture; the island has a rock ring; js/legacy is deleted.
 - By hand after the sweep: low road bridges wear a 0.22 slab so a boat's hull clears them, and the boat rider ducks under every deck.
+- v14.1, the golf guide and the smooth cart (js/player.js auto-drive, js/render3d.js golf guide):
+  - A round opens with "Press Tab and the cart drives you to tee 1"; a beacon stands over the next tee or the resting ball, the directions line gives its distance and bearing, and the minimap marks it.
+  - Tab is the whole trip: it drives to the tee or beside the ball, the visitor steps out and walks to the stance (over the footbridge for a ball on the island). Tab also works on foot within 8 tiles of the parked cart.
+  - The auto-drive rounds corners (pure pursuit along the whole route with a speed scaled lookahead), eases its speed with the turn ahead, brakes on a curve over the remaining route and turns to its parking heading instead of snapping.
+  - The auto-drive keeps off the greens and never parks ahead of the ball on the line to the cup; a ball on a green gets the nearest spot off it.
 - Known and left alone (each needs a redesign, not a patch):
   - The marina footbridge (channel-footbridge) still humps: 0.154 per quarter tile against a 0.12 target. Its span cannot grow without covering the marina shore tile.
   - Path ribbons meet the one and two wide decks off centre where a spline path turns at the bank.

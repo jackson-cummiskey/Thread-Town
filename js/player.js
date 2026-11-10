@@ -221,7 +221,12 @@ const AUTO_TURN = 1.5, AUTO_SLOW = 2.0, AUTO_SLOW_ERR = 0.35, STUCK_LEN = 0.8, M
    AUTO_PIVOT_ERR (at AUTO_SLOW the turning radius, 1.4 / tan 0.55, is about 2.3, wider than a
    short last leg, so a cart that only slowed would orbit its target forever); AUTO_MAX_T caps one
    auto-drive as a safety net. */
-const AUTO_PIVOT_ERR = 0.9, AUTO_MAX_T = 40;
+const AUTO_PIVOT_ERR = 0.9, AUTO_MAX_T = 90, TAB_REACH = 8;
+/* v14.1, the smooth auto-drive: the aim point runs AUTO_LD_MIN to AUTO_LD_MAX ahead along the whole
+   route (so corners are rounded, not stopped at), the speed eases down with the heading error to the
+   aim and to a point farther on, the last leg slows on a braking curve (AUTO_DECEL), the in-place
+   turn fades in under AUTO_TURN_V, and the cart turns to its parking heading instead of snapping. */
+const AUTO_LD_MIN = 1.6, AUTO_LD_GAIN = 0.3, AUTO_LD_MAX = 4.0, AUTO_TURN_V = 2.5, AUTO_DECEL = 3.5, AUTO_MIN_F = 0.2, AUTO_HARD_ERR = 1.2, AUTO_SETTLE_MAX = 2.5;
 const CART_SEAT_Y = 0.5, CART_CAM_ALIGN = 2.5, CART_CAM_QUIET = 0.8;
 const BOUNDARY_LEN = 1.0, ABANDON_WINDOW = 4, READY_WALK = 5, CLUB_REACH = 1.3;
 /* v10 (CONTRACT_V10 "Thread National"): a hole is picked up and scored HOLE_CAP at that many
@@ -1615,8 +1620,10 @@ export function createPlayer(ctx) {
     }
     return narrowBridgeTiles.has(tz * COLS + tx);
   }
+  let noGreen = false;   // v14.1: raised while the auto-drive plans and steps, so it keeps off the greens
   const cartPointOK = (px, pz) => {
     const tx = Math.floor(px), tz = Math.floor(pz), v = at(tx, tz);
+    if (noGreen && v === GR) return false;
     return land(v) && (v === CP || inRegion(px, pz)) && !(v === BR && narrowBridgeAt(tx, tz)) && !kickerTileAt(tx, tz);   // v11: a kicker is a low obstacle
   };
   /* The island hole whose island holds (x, z): the hole's island polygon, else its raster tiles. */
@@ -1754,7 +1761,7 @@ export function createPlayer(ctx) {
       if (v0s < -0.01) v = Math.min(0, v + CART_BRAKE * dt);
       else if (v < maxV) v = Math.min(maxV, v + CART_ACCEL * throttle * dt);
     } else if (throttle < -0.05) {
-      if (v0s > 0.05) v = Math.max(0, v - CART_BRAKE * dt);
+      if (v0s > 0.05) v = Math.max(0, v - CART_BRAKE * Math.min(1, -throttle) * dt);   // v14.1: the brake follows the pedal (S is still the full brake)
       else { const rv = -CART_REVERSE * maxV; if (v > rv) v = Math.max(rv, v + CART_ACCEL * throttle * dt); }
     } else if (v > 0) v = Math.max(0, v - CART_FRICTION * dt);
     else if (v < 0) v = Math.min(0, v + CART_FRICTION * dt);
@@ -1766,7 +1773,7 @@ export function createPlayer(ctx) {
     const rate = Math.abs(target) > Math.abs(c.steer) ? STEER_IN : STEER_BACK;
     c.steer = clamp(c.steer + clamp(target - c.steer, -rate * dt, rate * dt), -STEER_MAX, STEER_MAX);
     let yaw = c.yaw + v / CART_WHEELBASE * Math.tan(c.steer) * dt;
-    if (turn !== 0 && Math.abs(v) < 1.0) yaw += turn * dt;
+    if (turn !== 0 && Math.abs(v) < AUTO_TURN_V) yaw += turn * dt;
     c.yaw = wrap(finite(yaw) ? yaw : y0);
     hx = Math.sin(c.yaw); hz = Math.cos(c.yaw);
     const nx = c.x + hx * v * dt, nz = c.z + hz * v * dt;
@@ -1959,29 +1966,102 @@ export function createPlayer(ctx) {
     if (dp && finite(dp.x) && finite(dp.y)) for (let d = 2.5; d <= 6; d += 0.5) { const x = dp.x + fx * d, z = dp.y + fz * d; if (cartFits(x, z)) { out.x = x; out.z = z; out.ok = true; return out; } }
     return out;
   }
+  const AIM = { x: 0, z: 0 };
+  const BALL_RINGS = [1.8, 2.6, 3.6, 5, 7, 9, 12];
+  let routeGreen = false;
+  function cartOnGreen(x, z) {
+    const r = CART_R, g = (px, pz) => at(Math.floor(px), Math.floor(pz)) === GR;
+    return g(x, z) || g(x - r, z - r) || g(x + r, z - r) || g(x - r, z + r) || g(x + r, z + r);
+  }
+  /* v14.1: the auto-drive's route keeps off the greens; routeGreen says it had to cross one. */
+  function routeAuto(c, tx, tz) {
+    routeGreen = cartOnGreen(c.x, c.z);
+    noGreen = !routeGreen;
+    let w = routeTo(c, tx, tz, []);
+    noGreen = false;
+    if (!w && !routeGreen) { routeGreen = true; w = routeTo(c, tx, tz, []); }
+    return w;
+  }
+  /* v14.1: where the cart stops for a ball: beside it (else behind it), never ahead of it on the
+     line to the cup and never on a green (a ball on a green gets the nearest spot off it). The
+     heading runs along the line of play. */
+  function ballSpot(c, bx, bz, out) {
+    out.ok = false;
+    const H = holeAt(GOLF.hole);
+    let ux = 0, uz = 0;
+    if (H && H.cup) { ux = H.cup.x - bx; uz = H.cup.y - bz; const ul = Math.hypot(ux, uz); if (ul > 1e-6) { ux /= ul; uz /= ul; } else { ux = 0; uz = 0; } }
+    out.yaw = (ux !== 0 || uz !== 0) ? Math.atan2(ux, uz) : NaN;
+    noGreen = true;
+    for (let pass = 0; pass < 4 && !out.ok; pass++) {
+      const r = pass < 2 ? ROUTE_R : CART_R, lim = pass % 2 === 0 ? 0.5 : 2;   // beside the ball first, then anywhere that is not ahead of it
+      for (let ri = 0; ri < BALL_RINGS.length && !out.ok; ri++) {
+        const rad = BALL_RINGS[ri];
+        let best = Infinity;
+        for (let k = 0; k < 16; k++) {
+          const a = k * Math.PI / 8, ox = Math.sin(a), oz = Math.cos(a), dot = ox * ux + oz * uz;
+          if (dot > 0.25 || Math.abs(dot) > lim) continue;
+          const x = bx + ox * rad, z = bz + oz * rad;
+          if (!cartFitsR(x, z, r)) continue;
+          const dc = Math.hypot(x - c.x, z - c.z);
+          if (dc < best) { best = dc; out.x = x; out.z = z; out.ok = true; }
+        }
+      }
+    }
+    noGreen = false;
+    return out;
+  }
+  /* v14.1: the auto-drive ends on foot: out of the cart and walking to the ball (over the
+     footbridge for a ball on the island) or to the tee, so Tab is the whole trip. */
+  function stepOutToBall(time) {
+    const g = GOLF, b = g.ball;
+    if (!inCart() || !inRound() || g.phase !== 'ready' || !b) return;
+    exitCart(time);
+    player.state = 'golf'; player.pose = 'walk'; player.leisure = null; player.onDeck = false; player.onBoard = false; player.held = null;
+    player.exiting = null; player.heightOffset = 0; vel.x = 0; vel.z = 0; hopT0 = -1;
+    prevPos.x = player.pos.x; prevPos.z = player.pos.y;
+    const H = holeAt(g.hole);
+    let ux = b.pos.x - player.pos.x, uz = b.pos.z - player.pos.y;
+    if (H && H.cup) { ux = H.cup.x - b.pos.x; uz = H.cup.y - b.pos.z; }
+    const ul = Math.hypot(ux, uz);
+    if (ul > 1e-6) { ux /= ul; uz /= ul; } else { ux = 0; uz = 1; }
+    beginWalkTo(b.pos.x - BEHIND_BALL * ux, b.pos.z - BEHIND_BALL * uz, time);
+  }
+  function stepOutToTee(time) {
+    const g = GOLF;
+    if (!inCart() || !inRound() || g.phase !== 'between') return;
+    const H = holeAt(g.hole);
+    if (!H || !H.tee || !H.cup) return;
+    exitCart(time);
+    if (!enterGolf('round', g.hole, time)) return;
+    teeStance(H);
+    beginWalkTo(S.dx, S.dz, time);
+  }
   function startAuto(kind, tx, tz, faceYaw) {
     const c = CART;
-    const wps = routeTo(c, tx, tz, []);
+    const wps = routeAuto(c, tx, tz);
     if (!wps) { setMessage('No cart route, walk from here'); return false; }
-    c.auto = { kind, wps, i: 0, sx: c.x, sz: c.z, tx, tz, faceYaw, stuckT: -1, backUntil: -1, replans: 0, gx: player.pos.x, gz: player.pos.y, t: 0 };
+    c.auto = { kind, wps, i: 0, sx: c.x, sz: c.z, tx, tz, faceYaw, stuckT: -1, backUntil: -1, replans: 0, gx: player.pos.x, gz: player.pos.y, t: 0, green: routeGreen, settling: false, settleT: 0 };
     return true;
   }
   function replanAuto(c) {
     const A = c.auto;
     if (A.kind === 'fetch') { stopShort(c, player.pos.x, player.pos.y, SPOT); if (SPOT.ok) { A.tx = SPOT.x; A.tz = SPOT.z; } }
-    const wps = routeTo(c, A.tx, A.tz, []);
+    const wps = routeAuto(c, A.tx, A.tz);
     if (!wps) { c.auto = null; c.speed = 0; setMessage('No cart route, walk from here'); return false; }
-    A.wps = wps; A.i = 0; A.sx = c.x; A.sz = c.z; A.stuckT = -1; A.backUntil = -1; A.replans += 1;
+    A.green = routeGreen;
+    A.wps = wps; A.i = 0; A.sx = c.x; A.sz = c.z; A.stuckT = -1; A.backUntil = -1; A.replans += 1; A.settling = false; A.settleT = 0;
     return true;
   }
   function arriveAuto(c, time) {
     const A = c.auto;
     c.auto = null; c.speed = 0; c.steer = 0;
-    if (A.kind === 'ball' && GOLF.ball) c.yaw = wrap(Math.atan2(GOLF.ball.pos.x - c.x, GOLF.ball.pos.z - c.z));
-    else if (finite(A.faceYaw)) c.yaw = wrap(A.faceYaw);
+    if (finite(A.faceYaw)) c.yaw = wrap(A.faceYaw);
+    else if (A.kind === 'ball' && GOLF.ball) c.yaw = wrap(Math.atan2(GOLF.ball.pos.x - c.x, GOLF.ball.pos.z - c.z));
     if (A.kind === 'fetch') { enterCart(time); startHome(time); }
     else if (A.kind === 'home') { exitCart(time); endRound(true); if (log) log('Back at the clubhouse.', 'info'); }
-    else if (A.kind === 'foot') setMessage('Walk over the footbridge');
+    else if (A.kind === 'foot') { if (inCart() && GOLF.phase === 'ready' && GOLF.ball) stepOutToBall(time); else setMessage('Walk over the footbridge'); }
+    else if (A.kind === 'ball') stepOutToBall(time);
+    else if (A.kind === 'tee') stepOutToTee(time);
   }
   function autoStep(c, dt, time) {
     const A = c.auto;
@@ -1999,28 +2079,59 @@ export function createPlayer(ctx) {
       const wp = A.wps[A.i], last = A.i >= A.wps.length - 1;
       const dx = wp.x - c.x, dz = wp.z - c.z, d = Math.hypot(dx, dz);
       const errWp = wrap(Math.atan2(dx, dz) - c.yaw);
-      if (!last && (d <= WP_REACH || (d < PASSED_D && Math.cos(errWp) < 0))) { A.i += 1; A.sx = wp.x; A.sz = wp.z; continue; }
-      if (last && (d <= STOP_AT || (d <= STOP_AT + 0.3 && Math.abs(c.speed) < 0.3) || (d < PASSED_D && Math.cos(errWp) < 0 && Math.abs(c.speed) < 1.5))) { arriveAuto(c, time); return; }
-      // pure pursuit along the segment: aim at the point LOOKAHEAD past the closest point on it
+      // progress along the current segment (1 at its end)
       const ex = wp.x - A.sx, ez = wp.z - A.sz, el2 = ex * ex + ez * ez;
-      let ax = wp.x, az = wp.z;
-      if (el2 > 1e-6) {
-        const el = Math.sqrt(el2);
-        const t = clamp(((c.x - A.sx) * ex + (c.z - A.sz) * ez) / el2 + LOOKAHEAD / el, 0, 1);
-        ax = A.sx + ex * t; az = A.sz + ez * t;
+      const tc = el2 > 1e-6 ? ((c.x - A.sx) * ex + (c.z - A.sz) * ez) / el2 : 1;
+      if (!last && (d <= WP_REACH || tc >= 1 || (d < PASSED_D && Math.cos(errWp) < 0) || (tc > 0.5 && nearerNext(c, A, wp, tc)))) { A.i += 1; A.sx = wp.x; A.sz = wp.z; continue; }
+      if (last && (A.settling || d <= STOP_AT || (d <= STOP_AT + 0.3 && Math.abs(c.speed) < 0.3) || (d < PASSED_D && Math.cos(errWp) < 0 && Math.abs(c.speed) < 1.5))) {
+        // v14.1: turn to the parking heading (or to the ball) on the spot, then arrive
+        const fy = finite(A.faceYaw) ? A.faceYaw : (A.kind === 'ball' && GOLF.ball ? Math.atan2(GOLF.ball.pos.x - c.x, GOLF.ball.pos.z - c.z) : NaN);
+        A.settling = true; A.settleT = (finite(A.settleT) ? A.settleT : 0) + dt;
+        if (Math.abs(c.speed) > 0.3 && A.settleT < 1) { stepCart(c, c.speed > 0 ? -1 : 1, 0, 0, dt); return; }   // roll to a stop first
+        const dy = finite(fy) ? wrap(fy - c.yaw) : 0;
+        if (Math.abs(dy) > 0.04 && A.settleT < AUTO_SETTLE_MAX) {
+          const rate = clamp(Math.abs(dy) * 3.5, 0.35, 2.2);
+          c.speed = 0; c.steer *= Math.max(0, 1 - 6 * dt);
+          c.yaw = wrap(c.yaw + clamp(dy, -rate * dt, rate * dt));
+          return;
+        }
+        arriveAuto(c, time); return;
       }
+      // pure pursuit along the route: aim at the point a speed scaled lookahead past the closest
+      // point, walking on through the later waypoints; a blocked sight line shortens the lookahead
+      const ld = clamp(AUTO_LD_MIN + AUTO_LD_GAIN * Math.abs(c.speed), AUTO_LD_MIN, AUTO_LD_MAX);
+      let ok = false;
+      for (let k = 0; k < 3 && !ok; k++) {
+        aimAlong(c, A, k === 0 ? ld : k === 1 ? ld * 0.6 : ld * 0.35);
+        ok = lineClear(c.x, c.z, AIM.x, AIM.z, CART_R);
+      }
+      if (!ok) {
+        // the old aim: LOOKAHEAD along the current segment only
+        AIM.x = wp.x; AIM.z = wp.z;
+        if (el2 > 1e-6) { const el = Math.sqrt(el2), t = clamp(tc + LOOKAHEAD / el, 0, 1); AIM.x = A.sx + ex * t; AIM.z = A.sz + ez * t; }
+      }
+      const ax = AIM.x, az = AIM.z, aimD = Math.max(0.5, Math.hypot(ax - c.x, az - c.z));
       const err = wrap(Math.atan2(ax - c.x, az - c.z) - c.yaw);
+      aimAlong(c, A, ld * 2 + 1);
+      const errFar = Math.hypot(AIM.x - c.x, AIM.z - c.z) > 0.5 ? wrap(Math.atan2(AIM.x - c.x, AIM.z - c.z) - c.yaw) : err;
       const maxV = cartMaxAt(c.x, c.z);
-      let targetV = maxV;
-      if (Math.abs(err) > AUTO_SLOW_ERR) targetV = Math.min(targetV, AUTO_SLOW);
-      // the target is beside or behind: stop and pivot in place (the turn below needs speed under 1)
-      if (Math.abs(err) > AUTO_PIVOT_ERR) targetV = 0;
-      if (last && d - STOP_AT < c.speed * c.speed / (2 * CART_BRAKE) + 0.3) targetV = 0;
+      // the speed eases down with the turn ahead; a target beside or behind stops the cart to pivot
+      const e = Math.max(Math.abs(err), Math.abs(errFar) * 0.85);
+      let targetV = maxV * clamp(1.12 - e, AUTO_MIN_F, 1);
+      if (Math.abs(err) > AUTO_HARD_ERR || (last && d < 4 && Math.abs(err) > AUTO_PIVOT_ERR)) targetV = 0;
+      // the braking curve over what is left of the whole route, not only its last leg
+      let remD = d;
+      for (let k = A.i; k < A.wps.length - 1; k++) remD += Math.hypot(A.wps[k + 1].x - A.wps[k].x, A.wps[k + 1].z - A.wps[k].z);
+      targetV = Math.min(targetV, Math.sqrt(2 * AUTO_DECEL * Math.max(0, remD - STOP_AT)) + 0.4);
+      const dv = targetV - c.speed;
       let throttle = 0;
-      if (c.speed < targetV - 0.1) throttle = 1; else if (c.speed > targetV + 0.1) throttle = -1;
+      if (dv > 0.05) throttle = clamp(dv / 1.5, 0.08, 1);
+      else if (dv < -0.3) throttle = -clamp(-dv / 2.5, 0.1, 1);
       if (throttle < 0 && c.speed <= 0.05) { throttle = 0; c.speed = 0; }
-      const steerIn = clamp(-err / 0.3, -1, 1);
-      const turn = (Math.abs(c.speed) < 1.0 && Math.abs(err) > 0.3) ? clamp(err * 2, -1, 1) * AUTO_TURN : 0;
+      // the pure pursuit steer angle for the aim, as a share of what the wheels can give at this speed
+      const sMax = STEER_MAX * (1 - STEER_HIGH * clamp(Math.abs(c.speed) / CART_TOP, 0, 1));
+      const steerIn = clamp(-Math.atan2(2 * CART_WHEELBASE * Math.sin(err), aimD) / sMax, -1, 1);
+      const turn = Math.abs(err) > 0.2 ? clamp(err * 2, -1, 1) * AUTO_TURN * clamp((AUTO_TURN_V - Math.abs(c.speed)) / 1.5, 0, 1) : 0;
       const x0 = c.x, z0 = c.z;
       stepCart(c, throttle, steerIn, turn, dt);
       // stuck against something while facing the line: back up, route again, then give up
@@ -2033,6 +2144,35 @@ export function createPlayer(ctx) {
       } else A.stuckT = -1;
       return;
     }
+  }
+  /* v14.1: the point dist along the route from the closest point on the current segment, walking
+     on through the later waypoints (so the aim rounds the corners), into AIM. */
+  function aimAlong(c, A, dist) {
+    let sx = A.sx, sz = A.sz, i = A.i, wp = A.wps[i];
+    let ex = wp.x - sx, ez = wp.z - sz, el = Math.hypot(ex, ez);
+    let t = el > 1e-6 ? clamp(((c.x - sx) * ex + (c.z - sz) * ez) / (el * el), 0, 1) : 1;
+    let left = dist;
+    for (let n = 0; n < 64; n++) {
+      const rem = el * (1 - t);
+      if (left <= rem || i >= A.wps.length - 1) break;
+      left -= rem; sx = wp.x; sz = wp.z; i += 1; wp = A.wps[i];
+      ex = wp.x - sx; ez = wp.z - sz; el = Math.hypot(ex, ez); t = 0;
+    }
+    const u = el > 1e-6 ? Math.min(1, t + left / el) : 1;
+    AIM.x = sx + ex * u; AIM.z = sz + ez * u;
+  }
+  /* v14.1: the cart has cut the corner: it has made progress along the next segment and lies nearer to it than to the current one. */
+  function nearerNext(c, A, wp, tc) {
+    const nx = A.wps[A.i + 1];
+    if (!nx) return false;
+    const fx = nx.x - wp.x, fz = nx.z - wp.z, fl2 = fx * fx + fz * fz;
+    if (fl2 < 1e-6) return true;
+    const t2 = ((c.x - wp.x) * fx + (c.z - wp.z) * fz) / fl2;
+    if (t2 <= 0.02) return false;
+    const u2 = Math.min(1, t2), u1 = clamp(tc, 0, 1);
+    const dn = Math.hypot(wp.x + fx * u2 - c.x, wp.z + fz * u2 - c.z);
+    const dc = Math.hypot(A.sx + (wp.x - A.sx) * u1 - c.x, A.sz + (wp.z - A.sz) * u1 - c.z);
+    return dn < dc;
   }
   /* ---- the cart in the world ---- */
   function spawnCart() {
@@ -2079,7 +2219,7 @@ export function createPlayer(ctx) {
   function updateCart(dt, time) {
     const c = CART;
     const seatedIn = inCart();
-    if (c.auto) autoStep(c, dt, time);
+    if (c.auto) { noGreen = !c.auto.green && !cartOnGreen(c.x, c.z); autoStep(c, dt, time); noGreen = false; }
     else if (seatedIn) stepCart(c, inp.fwd, inp.side, 0, dt);
     c.y = cartHeight(c.x, c.z);
     if (!inCart()) return;         // the arrival may have stepped out
@@ -2090,7 +2230,8 @@ export function createPlayer(ctx) {
     player.pose = 'sit'; player.speed = Math.abs(c.speed); vel.x = 0; vel.z = 0; player.yoff = 0;
     player.animT += dt;
     if (clock - lastMouseT > CART_CAM_QUIET) {
-      const d = wrap(c.yaw - orbitYawT), mx = CART_CAM_ALIGN * dt, st = clamp(d, -mx, mx);
+      // v14.1: on an auto-drive the camera eases onto the heading instead of chasing it at a fixed rate
+      const d = wrap(c.yaw - orbitYawT), mx = CART_CAM_ALIGN * dt, st = c.auto ? clamp(d * Math.min(1, 2.4 * dt), -mx, mx) : clamp(d, -mx, mx);
       orbitYawT = wrap(orbitYawT + st); player.orbitYaw = wrap(player.orbitYaw + st);
     }
   }
@@ -2114,9 +2255,11 @@ export function createPlayer(ctx) {
       // v10 review: a ball on the island hole's island is reached on foot over the footbridge
       const HI = islandHoleAt(g.ball.pos.x, g.ball.pos.z);
       if (HI) { driveToBridgeFoot(HI); return; }
+      ballSpot(c, g.ball.pos.x, g.ball.pos.z, SPOT);
+      if (SPOT.ok && startAuto('ball', SPOT.x, SPOT.z, SPOT.yaw)) return;
       stopShort(c, g.ball.pos.x, g.ball.pos.z, SPOT);
       if (!SPOT.ok) { setMessage('No cart route, walk from here'); return; }
-      startAuto('ball', SPOT.x, SPOT.z, NaN);
+      if (startAuto('ball', SPOT.x, SPOT.z, NaN)) g.message = null;
     } else if (g.phase === 'between') {
       const H = holeAt(g.hole);
       if (!H || !H.tee) return;
@@ -3192,6 +3335,7 @@ export function createPlayer(ctx) {
     g.cartHint = null; clubOverride = false; abandonAskedAt = -Infinity;
     player.golf = g; player.held = null;
     spawnCart(); enterCart(time);
+    setMessage('Press Tab and the cart drives you to tee 1', 12);   // v14.1: say it where it is seen
     if (log) log('A round of ' + holeCount() + ' holes at ' + courseName() + '. Drive to the first tee.', 'info');
     return true;
   }
@@ -3259,6 +3403,12 @@ export function createPlayer(ctx) {
     stopShort(CART, player.pos.x, player.pos.y, SPOT);
     if (!SPOT.ok || !startAuto('fetch', SPOT.x, SPOT.z, NaN)) setMessage('No cart route, walk from here');
   }
+  /* v14.1: on foot in a round, between shots or holes, within TAB_REACH of the parked cart. */
+  function tabFromFoot() {
+    const g = GOLF;
+    return inRound() && player.cart === CART && !CART.auto && player.state === 'idle' && !player.interior
+      && (g.phase === 'ready' || g.phase === 'between') && Math.hypot(CART.x - player.pos.x, CART.z - player.pos.y) <= TAB_REACH;
+  }
   function teeHintFor(n) { if (!teeHint[n]) teeHint[n] = 'Tab  Drive to tee ' + n; return teeHint[n]; }
   /* golf.cartHint, the HUD cart line. */
   function updateHints() {
@@ -3269,6 +3419,7 @@ export function createPlayer(ctx) {
     else if (!have) g.cartHint = null;
     else if (CART.auto) g.cartHint = 'Driving';
     else if (inCart()) g.cartHint = g.phase === 'ready' ? (g.ball && islandHoleAt(g.ball.pos.x, g.ball.pos.z) ? 'Tab  Drive to the footbridge' : 'Tab  Drive to ball') : g.phase === 'between' ? teeHintFor(g.hole) : 'E  Get out';
+    else if (tabFromFoot()) g.cartHint = g.phase === 'between' ? teeHintFor(g.hole) : 'Tab  Drive to ball';
     else g.cartHint = 'E  Get in the cart';
   }
 
@@ -3837,7 +3988,12 @@ export function createPlayer(ctx) {
     // v8: X during a round asks, then abandons (or ends the summary); X in practice or the range leaves
     // v9: X and Tab do nothing while riding
     if (inp.quit) { inp.quit = false; if (!riding() && !hovering() && !boating()) { if (inRound()) roundQuit(time); else if (golfing()) leaveGolf(time); } }
-    if (inp.drive) { inp.drive = false; if (inCart()) startAutoDrive(time); }
+    if (inp.drive) {
+      inp.drive = false;
+      // v14.1: Tab on foot beside the parked cart gets in and drives (to the ball or the next tee)
+      if (!inCart() && tabFromFoot()) enterCart(time);
+      if (inCart()) startAutoDrive(time);
+    }
     if (!golfing()) inp.club = null;
     if (player.cart === CART) updateCart(dt, time);
     if (riding()) updateScooter(dt, time);

@@ -384,7 +384,7 @@ const WP_HERE_LEN = 2.0;                               // 'You are here' stays t
 const M_HOLD = 0.4;                                    // M held this long opens the map
 const WP_HUD_ID = 'walk-waypoint';
 let wpEl = null, wpTextEl = null, wpArrowEl = null;    // the HUD line, its text span and its arrow
-const wpState = { text: '', deg: 9999, hidden: true, hereUntil: -1, m: -1, word: '', line: '' };   // m, word, line: the last directions line and what it was built from
+const wpState = { text: '', deg: 9999, hidden: true, hereUntil: -1, m: -1, word: '', lab: '', line: '' };   // m, word, line: the last directions line and what it was built from
 let mapOpenFlag = false;                               // our own view of the map (the minimap's isOpen wins when it exists)
 let mHoldAt = -1, mHoldOpened = false;                 // the M key held (wall clock ms), and whether the hold opened the map
 let boatParent = null, boatQueue = null;               // the boat route BFS scratch (allocated on first use)
@@ -4385,6 +4385,8 @@ function minimapTarget(p) {
     const b = G.ball;
     if (s !== 'golf' && b && b.pos && isFinite(b.pos.x) && isFinite(b.pos.z)) { mmTarget.x = b.pos.x; mmTarget.z = b.pos.z; return mmTarget; }
     const h = golfHoles()[(G.hole | 0) - 1];
+    const t = G.mode === 'round' && G.phase === 'between' && h ? h.tee : null;   // v14.1: the next tee while driving to it
+    if (t && isFinite(t.x) && isFinite(t.y)) { mmTarget.x = t.x + 0.5; mmTarget.z = t.y + 0.5; return mmTarget; }
     const c = h && h.cup;
     if (c) {
       const cx = Array.isArray(c) ? c[0] : c.x, cz = Array.isArray(c) ? c[1] : c.y;
@@ -4402,6 +4404,69 @@ function minimapTarget(p) {
     if (i >= 0) { mmTarget.x = dockPosX(ds[i]); mmTarget.z = dockPosZ(ds[i]); return mmTarget; }
   }
   return null;
+}
+/* ---------- v14.1: the golf guide ----------
+   During a round the next place to go (the tee of the hole in play while driving to it, the
+   resting ball between shots) gets a beacon in the world, the minimap target and the directions
+   line, so the way to hole 1 is never a guess. */
+const GG = { ok: false, x: 0, z: 0, label: '' };
+const GG_TEE = [];
+const GUIDE_NEAR = 3;        // tiles: inside this the tee or ball prompt takes over
+let golfBeacon = null;
+function golfGuide(p) {
+  GG.ok = false;
+  const G = p && p.golf;
+  if (!G || G.mode !== 'round' || p.interior) return GG;
+  if (G.phase === 'between') {
+    const n = G.hole | 0, h = golfHoles()[n - 1], t = h && h.tee;
+    if (t && isFinite(t.x) && isFinite(t.y)) { GG.ok = true; GG.x = t.x + 0.5; GG.z = t.y + 0.5; GG.label = GG_TEE[n] || (GG_TEE[n] = 'Tee ' + n); }
+  } else if (G.phase === 'ready' && p.state !== 'golf' && G.ball && G.ball.pos && isFinite(G.ball.pos.x) && isFinite(G.ball.pos.z)) {
+    GG.ok = true; GG.x = G.ball.pos.x; GG.z = G.ball.pos.z; GG.label = 'Your ball';
+  }
+  return GG;
+}
+/* The beacon: a soft aqua beam, a bobbing salmon arrow and a name tag that keeps its size on screen. */
+function buildGolfBeacon() {
+  const g = new THREE.Group(); g.name = 'golf-beacon'; g.visible = false;
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 16, 14, 1, true).translate(0, 8, 0),
+    new THREE.MeshBasicMaterial({ color: AQUA, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide, fog: false }));
+  const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.55, 1.1, 4).rotateX(Math.PI), new THREE.MeshBasicMaterial({ color: SALMON, fog: false }));
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 96;
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, sizeAttenuation: false, fog: false }));
+  label.scale.set(0.16, 0.06, 1); label.renderOrder = 20; label.position.y = 5.6;
+  for (const o of [beam, arrow, label]) { o.castShadow = false; o.receiveShadow = false; g.add(o); }
+  scene.add(g);
+  golfBeacon = { g, arrow, cv, tex, text: null };
+}
+function drawBeaconLabel(text) {
+  const b = golfBeacon, c = b.cv.getContext ? b.cv.getContext('2d') : null;
+  b.text = text;
+  if (!c) return;
+  c.clearRect(0, 0, 256, 96);
+  c.beginPath();
+  if (typeof c.roundRect === 'function') c.roundRect(4, 14, 248, 68, 34); else c.rect(4, 14, 248, 68);
+  c.fillStyle = 'rgba(0,45,79,0.94)'; c.fill();
+  c.strokeStyle = AQUA; c.lineWidth = 4; c.stroke();
+  c.fillStyle = '#FFFFFF'; c.font = '600 40px Kanit, Inter, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.fillText(text, 128, 50);
+  b.tex.needsUpdate = true;
+}
+function updateGolfBeacon(time) {
+  const p = walkOn && !gameMode && !subwayPhase && !insideRoom ? player : null;
+  const gg = p ? golfGuide(p) : null;
+  const show = !!(gg && gg.ok && Math.hypot(gg.x - p.pos.x, gg.z - p.pos.y) > GUIDE_NEAR);
+  if (!show) { if (golfBeacon && golfBeacon.g.visible) golfBeacon.g.visible = false; return; }
+  if (!golfBeacon) {
+    if (typeof document === 'undefined' || !document.createElement) return;
+    try { buildGolfBeacon(); } catch (e) { golfBeacon = null; return; }
+  }
+  const b = golfBeacon;
+  if (b.text !== gg.label) drawBeaconLabel(gg.label);
+  b.g.visible = true;
+  b.g.position.set(gg.x, hAt(gg.x, gg.z), gg.z);
+  b.arrow.position.y = 3.4 + Math.sin(time * 3) * 0.3;
+  b.arrow.rotation.y = time * 1.5;
 }
 function updateMinimap(time) {
   if (!minimap) return;
@@ -4697,18 +4762,22 @@ function ensureWpEl() {
    here' for WP_HERE_LEN after reaching it, hidden otherwise. A steady frame touches no DOM. */
 function updateWaypointHud(p, time) {
   let text = '', deg = 0, show = false;
-  if (p && WP.set && walkOn) {
-    const dx = WP.x - p.pos.x, dz = WP.z - p.pos.y;
+  // v14.1: with no waypoint set, a round's next tee or resting ball gets the same line
+  const gg = p && walkOn && !WP.set ? golfGuide(p) : null;
+  const guide = !!(gg && gg.ok && Math.hypot(gg.x - p.pos.x, gg.z - p.pos.y) > GUIDE_NEAR);
+  if (p && walkOn && (WP.set || guide)) {
+    const way = WP.set, tx = way ? WP.x : gg.x, tz = way ? WP.z : gg.z, lab = way ? 'Waypoint' : gg.label;
+    const dx = tx - p.pos.x, dz = tz - p.pos.y;
     let dist = Math.hypot(dx, dz);
     // the distance along the route when there is one (tile centres), else as the crow flies
-    if (routeOk && routeN > 1) {
+    if (way && routeOk && routeN > 1) {
       let along = 0, px = p.pos.x, pz = p.pos.y;
       for (let i = 0; i < routeN; i++) { const r = ROUTE_PTS[i]; along += Math.hypot(r.x - px, r.z - pz); px = r.x; pz = r.z; }
       if (along > dist) dist = along;
     }
     // the point WP_AHEAD tiles ahead along the route (the waypoint itself without one)
-    let ax = WP.x, az = WP.z;
-    if (routeOk && routeN > 0) {
+    let ax = tx, az = tz;
+    if (way && routeOk && routeN > 0) {
       let i = 0;
       // skip route points already behind the visitor (within a tile and a bit)
       while (i < routeN - 1 && Math.hypot(ROUTE_PTS[i].x - p.pos.x, ROUTE_PTS[i].z - p.pos.y) < 1.2) i++;
@@ -4721,7 +4790,7 @@ function updateWaypointHud(p, time) {
     const m = Math.max(1, Math.round(dist * M_PER_TILE));
     const word = bearingWord(a);
     // v14: the line is rebuilt only when the metres or the bearing word change, not on every frame
-    if (m !== wpState.m || word !== wpState.word) { wpState.m = m; wpState.word = word; wpState.line = 'Waypoint: ' + m + ' m, ' + word; }
+    if (m !== wpState.m || word !== wpState.word || lab !== wpState.lab) { wpState.m = m; wpState.word = word; wpState.lab = lab; wpState.line = lab + ': ' + m + ' m, ' + word; }
     text = wpState.line;
     deg = Math.round(-a * 180 / Math.PI / 5) * 5;   // left turns counterclockwise on screen
     show = true;
@@ -6195,6 +6264,7 @@ function stepWorld(dt) {
   if (hiRing) hiRing.update(dt, time);
   updateOverlays();
   stepMHold();           // v13: M held opens the town map
+  updateGolfBeacon(time);   // v14.1: the beacon over the next tee or the resting ball
   updateMinimap(time);   // v11: after the player and the prompt target of this frame; v13: the route and the HUD line
   if (touch) syncTouchMode();   // v12: the layer's buttons follow the player state
 }
